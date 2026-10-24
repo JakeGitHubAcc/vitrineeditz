@@ -15,9 +15,10 @@ import label
 FPS = 24
 # The shortest loop for a fade or a sway, in seconds.
 LONG = 8.0
-# How far past a line of text it is painted out, as a share of the line's height, and the soft edge of
-# the fade's mask, in pixels.
-ERASE_PAD, FADE_EDGE = 0.3, 4
+# How far past a line's box its letters are looked for, as a share of its height (the reader's boxes can
+# clip them); how far a letter's shade must be from the box's usual one, out of 255; how far the letters
+# are grown for their soft edges, and the soft edge of the fade's mask, in pixels.
+ERASE_PAD, LETTER_CONTRAST, GLYPH_GROW, FADE_EDGE = 0.08, 60, 3, 2
 # The fade: the text shows for this share of the loop at its start, fades out over FADE seconds, stays
 # away, and fades back in to show again for this share at the end. The first frame, the poster, has it.
 SHOWN_FIRST, SHOWN_LAST, FADE = 0.3, 0.12, 1.2
@@ -26,21 +27,41 @@ SHOWN_FIRST, SHOWN_LAST, FADE = 0.3, 0.12, 1.2
 DRIFT_X, DRIFT_Y, PUSH, TILT, ZOOM_LEAST = 0.005, 0.003, 0.012, 0.25, 1.025
 
 
-def hole(size, boxes):
-    """1 over the lines of text, grown by ERASE_PAD of their height. Boxes are shares of the side."""
+def letters(patch):
+    """Which pixels of a line's box (gray, uint8) are its letters: the box split into its light and dark
+    shades, the letters being the shade that touches the box's edge less, as the background runs out past
+    it. None when the two shades are too alike to tell apart."""
+    split, light = cv2.threshold(patch, 0, 1, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    light = light.astype(bool)
+    if not light.any() or light.all():
+        return None
+    if abs(float(patch[light].mean()) - float(patch[~light].mean())) < LETTER_CONTRAST:
+        return None
+    edge = np.concatenate([light[0], light[-1], light[:, 0], light[:, -1]])
+    return ~light if edge.mean() > 0.5 else light
+
+
+def hole(cover, boxes):
+    """1 over the letters of each line of text in `cover` (RGB array, square), not the box around them,
+    grown by GLYPH_GROW for their soft edges, so a design next to the text, or inside its box, stays. A line
+    whose letters cannot be told from their background is painted out whole. Boxes are shares of the side."""
+    size = cover.shape[0]
+    gray = cv2.cvtColor(cover, cv2.COLOR_RGB2GRAY)
     mask = np.zeros((size, size), bool)
     for l, t, r, b in boxes:
         grow = ERASE_PAD * (b - t)
         x0, y0 = max(0, int((l - grow) * size)), max(0, int((t - grow) * size))
         x1, y1 = min(size, int(math.ceil((r + grow) * size))), min(size, int(math.ceil((b + grow) * size)))
-        mask[y0:y1, x0:x1] = True
-    return mask
+        if x1 - x0 < 2 or y1 - y0 < 2:
+            continue
+        found = letters(gray[y0:y1, x0:x1])
+        mask[y0:y1, x0:x1] |= True if found is None else found
+    return binary_dilation(mask, iterations=GLYPH_GROW)
 
 
 def plate(cover, boxes, lama):
     """`cover` (PIL, square) with its text painted out by LaMa, and the mask of where it was, soft at its edge."""
-    size = cover.width
-    where = hole(size, boxes)
+    where = hole(np.asarray(cover), boxes)
     filled = label.inpaint(np.asarray(cover, dtype=np.float32) / 255, where.astype(np.float32), lama)
     soft = gaussian_filter(binary_dilation(where, iterations=FADE_EDGE).astype(np.float32), FADE_EDGE / 2)
     soft = np.maximum(soft, where)
