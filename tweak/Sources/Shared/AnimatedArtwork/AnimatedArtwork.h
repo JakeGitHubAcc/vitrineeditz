@@ -26,6 +26,13 @@ void SGLockMotionShowPlain(BOOL plain);
 static inline BOOL SGLockArtworkShowsLyrics(SGLockArtwork artwork) {
     return artwork == SGLockArtworkLyrics || artwork == SGLockArtworkMotionLyrics;
 }
+// Under Every song, what a song with no moving artwork shows, stored as the index of SGLockCoverStyle
+// (Moving blur unless changed). Read on every track, as the choice above is.
+#define SGKeyLockScreenCoverStyle @"spotifyglass.lockscreen.coverStyle"
+typedef NS_ENUM(NSInteger, SGLockCoverStyle) {
+    SGLockCoverMovingBlur = 0,   // the cover over a moving blur of it (SGFluidClip.h)
+    SGLockCoverExtended,         // the cover across the screen, its edges drawn out, still (SGExtendedClip.h)
+};
 // How the lyrics are drawn, stored as the index of SGLyricsClipStyle (Still unless changed).
 #define SGKeyLockScreenLyricsStyle @"spotifyglass.lockscreen.lyricsStyle"
 // Off until switched on: the lock screen widget's star switches the choice between a choice with lyrics and

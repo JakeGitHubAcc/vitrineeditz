@@ -22,6 +22,11 @@ NSArray *SGLockScreenMotionRows(void) {
                                                        @"With moving artwork, for songs that have none",
                                       SGKeyLockScreenLyricsStyle, @[@"Still", @"Animated"], 0);
         style.visible = ^BOOL { return SGLockArtworkShowsLyrics(SGLockScreenArtwork()); };
+        SGModRow *cover = SGChoiceRow(@"Songs without moving artwork", @"Moving blur puts the cover over a slowly turning "
+                                                                        @"blur of it. Extended cover lays it across the screen, "
+                                                                        @"still, its edges drawn out to the top and bottom",
+                                      SGKeyLockScreenCoverStyle, @[@"Moving blur", @"Extended cover"], SGLockCoverMovingBlur);
+        cover.visible = ^BOOL { return SGLockScreenArtwork() == SGLockArtworkEverySong; };
         SGModRow *lowData = SGOptionRow(@"Download in Low Data Mode", @"Moving artwork, up to about 7 MB a song", SGKeyMotionLowData);
         lowData.visible = ^BOOL {
             SGLockArtwork artwork = SGLockScreenArtwork();
@@ -35,10 +40,11 @@ NSArray *SGLockScreenMotionRows(void) {
         star.visible = ^BOOL { return SGLockScreenArtwork() != SGLockArtworkOff; };
         return @[
             SGChoiceRow(@"Full-screen artwork", @"The Canvas or Apple Music's animated cover, or the lyrics a line at a time. "
-                                                 @"Every song puts the cover over a moving blur of it where a song has neither. "
+                                                 @"Every song shows the cover where a song has neither, in the style picked below. "
                                                  @"Moving artwork with lyrics puts the lines over the Canvas or animated cover",
                         SGKeyLockScreenArtwork, @[@"Off", @"Moving artwork", @"Lyrics", @"Every song", @"Moving artwork with lyrics"],
                         SGLockArtworkOff),
+            cover,
             style,
             star,
             sources,
