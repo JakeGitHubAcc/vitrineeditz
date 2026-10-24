@@ -144,28 +144,20 @@ static NSString *pictureOf(SPTPlayerTrack *track, NSDictionary *metadata) {
     return SGURIString(track.URI);
 }
 
-// The share of a 3:4 clip's width the lock screen shows: it fills the screen's height and cuts the sides
-// off a taller screen. Main queue.
-static CGFloat visibleWidth(CGSize clip) {
-    CGSize screen = UIScreen.mainScreen.bounds.size;
-    CGFloat shape = MIN(screen.width, screen.height) / MAX(MAX(screen.width, screen.height), 1);
-    return MIN(shape / (clip.width / clip.height), 1);
-}
-
 // The cover's clip is 3:4 (SGLyricsClipSize), so it goes only where the system lists that key. Its style
-// is read as the track is looked up, and each style keeps its own file.
+// is read as the track is looked up, and each style keeps its own file; the extended cover's key names its
+// layout, so a clip kept from an older one is not shown.
 API_AVAILABLE(ios(26.0))
 static void showCover(NSString *picture) {
     if (![MPNowPlayingInfoCenter.supportedAnimatedArtworkKeys containsObject:MPNowPlayingInfoProperty3x4AnimatedArtwork]) return;
     BOOL extended = SGInt(SGKeyLockScreenCoverStyle, SGLockCoverMovingBlur) == SGLockCoverExtended;
-    NSURL *file = SGMotionMadeFile([(extended ? @"extended\n" : @"fluid\n") stringByAppendingString:picture]);
+    NSURL *file = SGMotionMadeFile([(extended ? @"extended.fullwidth\n" : @"fluid\n") stringByAppendingString:picture]);
     NSString *title = sg_title;
     CGSize size = SGLyricsClipSize(SGMotionPixels());
-    CGFloat visible = visibleWidth(size);
     MPMediaItemAnimatedArtwork *artwork = [[MPMediaItemAnimatedArtwork alloc] initWithArtworkID:file.lastPathComponent
         previewImageRequestHandler:^(CGSize wanted, void (^completion)(UIImage *)) {
             withCover(title, ^(CGImageRef cover) {
-                CGImageRef frame = extended ? SGExtendedClipFrame(cover, size, visible) : SGFluidClipFrame(cover, size);
+                CGImageRef frame = extended ? SGExtendedClipFrame(cover, size) : SGFluidClipFrame(cover, size);
                 completion(frame ? filled([UIImage imageWithCGImage:frame], wanted) : nil);
                 CGImageRelease(frame);
             });
@@ -174,7 +166,7 @@ static void showCover(NSString *picture) {
             withCover(title, ^(CGImageRef cover) {
                 CFAbsoluteTime start = CFAbsoluteTimeGetCurrent();
                 BOOL ok = [NSFileManager.defaultManager fileExistsAtPath:file.path]
-                    || (extended ? SGExtendedClipWrite(file, cover, size, visible) : SGFluidClipWrite(file, cover, size));
+                    || (extended ? SGExtendedClipWrite(file, cover, size) : SGFluidClipWrite(file, cover, size));
                 SGLog(@"lock motion: the cover's clip %@ %@ in %.0f ms", file.lastPathComponent, ok ? @"ready" : @"not written",
                       (CFAbsoluteTimeGetCurrent() - start) * 1000);
                 completion(ok ? file : nil);

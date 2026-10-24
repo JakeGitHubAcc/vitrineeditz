@@ -7,9 +7,8 @@
 #import <CoreGraphics/CoreGraphics.h>
 #import <Foundation/Foundation.h>
 
-// The clip's frame, for the lock screen's preview image. `size` is SGLyricsClipSize's; `visible` is the
-// share of the clip's width the lock screen shows, which fills the screen's height and cuts the sides off
-// a taller screen, so the cover is made that wide.
-CGImageRef SGExtendedClipFrame(CGImageRef cover, CGSize size, CGFloat visible) CF_RETURNS_RETAINED;
+// The clip's frame, for the lock screen's preview image. `size` is SGLyricsClipSize's; the lock screen
+// shows it at the screen's full width, so the cover is drawn across the clip's.
+CGImageRef SGExtendedClipFrame(CGImageRef cover, CGSize size) CF_RETURNS_RETAINED;
 // Writes the clip as H.264 to `file`, replacing it, and returns once it is written; NO if it was not.
-BOOL SGExtendedClipWrite(NSURL *file, CGImageRef cover, CGSize size, CGFloat visible);
+BOOL SGExtendedClipWrite(NSURL *file, CGImageRef cover, CGSize size);
