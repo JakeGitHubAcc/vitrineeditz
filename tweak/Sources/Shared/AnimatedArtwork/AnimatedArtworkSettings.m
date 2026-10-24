@@ -4,6 +4,7 @@
 #import "Settings/SGModPage.h"
 #import "Settings/SGPageStyle.h"
 #import "AnimatedArtwork.h"
+#import "SGCoverAnimator.h"
 
 SGLockArtwork SGLockScreenArtwork(void) {
     if (@available(iOS 26.0, *)) {
@@ -13,6 +14,52 @@ SGLockArtwork SGLockScreenArtwork(void) {
         return (SGLockArtwork)SGInt(SGKeyLockScreenArtwork, SGLockArtworkOff);
     }
     return SGLockArtworkOff;
+}
+
+static void tell(NSString *title, NSString *message) {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:title message:message preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleCancel handler:nil]];
+    [SGTopController() presentViewController:alert animated:YES completion:nil];
+}
+
+static void sendPlaying(void) {
+    SGLockMotionAnimatePlaying(^(NSString *error) {
+        if (error) tell(@"Not sent", error);
+    });
+}
+
+// The animate row's tap: the computer's address first if none is entered, then, for the playing album, send
+// it, or offer to stop, make again or delete what it already has.
+static void animateTapped(void) {
+    if (!SGAnimatedCoverServer()) {
+        SGAnimatedCoverAskServer(^{ animateTapped(); });
+        return;
+    }
+    NSString *picture = SGLockMotionPlayingPicture();
+    if (!picture) {
+        tell(@"Nothing is playing", @"Play a song from the album first.");
+        return;
+    }
+    BOOL saved = SGAnimatedCoverFile(picture) != nil, waiting = SGAnimatedCoverPending(picture);
+    if (!saved && !waiting) {
+        sendPlaying();
+        return;
+    }
+    UIAlertController *sheet = [UIAlertController alertControllerWithTitle:SGLockMotionPlayingAlbum()
+        message:saved ? @"This album's animated cover is saved on this iPhone." : @"Your computer is animating this album's cover."
+        preferredStyle:UIAlertControllerStyleActionSheet];
+    if (saved) {
+        [sheet addAction:[UIAlertAction actionWithTitle:@"Animate Again" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+            SGAnimatedCoverForget(picture);
+            sendPlaying();
+        }]];
+    }
+    [sheet addAction:[UIAlertAction actionWithTitle:saved ? @"Delete Animated Cover" : @"Stop Waiting" style:UIAlertActionStyleDestructive
+                                            handler:^(UIAlertAction *action) { SGAnimatedCoverForget(picture); }]];
+    [sheet addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    UIViewController *top = SGTopController();
+    sheet.popoverPresentationController.sourceView = top.view;
+    [top presentViewController:sheet animated:YES completion:nil];
 }
 
 NSArray *SGLockScreenMotionRows(void) {
@@ -38,6 +85,19 @@ NSArray *SGLockScreenMotionRows(void) {
                                                              @"and back. It takes the place of Spotify's like and dislike buttons",
                                      SGKeyLockScreenStar);
         star.visible = ^BOOL { return SGLockScreenArtwork() != SGLockArtworkOff; };
+        SGModRow *animate = SGStatActionRow(@"Animate this album's cover",
+                                            @"Your computer makes a moving version of the playing album's cover with Vitrine Animate. "
+                                            @"It is saved on this iPhone and plays for every song of the album that has no Canvas "
+                                            @"or animated cover, with the computer off",
+                                            ^NSString *{ return SGAnimatedCoverStatus(SGLockMotionPlayingPicture()) ?: @"Not animated"; },
+                                            ^{ animateTapped(); });
+        animate.visible = lowData.visible;
+        SGModRow *computer = SGStatActionRow(@"Computer", @"Where Vitrine Animate runs, as it shows when it starts",
+                                             ^NSString *{ return SGAnimatedCoverServer() ?: @"Not set"; },
+                                             ^{ SGAnimatedCoverAskServer(nil); });
+        computer.visible = lowData.visible;
+        SGModRow *kept = SGStatRow(@"Animated covers saved", ^NSString *{ return [NSString stringWithFormat:@"%lu", (unsigned long)SGAnimatedCoverCount()]; });
+        kept.visible = lowData.visible;
         return @[
             SGChoiceRow(@"Full-screen artwork", @"The Canvas or Apple Music's animated cover, or the lyrics a line at a time. "
                                                  @"Every song shows the cover where a song has neither, in the style picked below. "
@@ -48,6 +108,9 @@ NSArray *SGLockScreenMotionRows(void) {
             style,
             star,
             sources,
+            animate,
+            computer,
+            kept,
             lowData,
         ];
     }
