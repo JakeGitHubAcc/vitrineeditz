@@ -19,6 +19,12 @@ typedef NS_ENUM(NSInteger, SGLockArtwork) {
 };
 // Off below iOS 26, which has no animated artwork on the lock screen.
 SGLockArtwork SGLockScreenArtwork(void);
+// The playing track's picture (the key its album's covers are kept by) and its album's name, nil before a
+// track plays; and the playing album's extended cover sent to the user's computer to animate
+// (SGCoverAnimator.h), `done` getting nil once it has it or what went wrong. LockScreenMotion.x. Main queue.
+NSString *SGLockMotionPlayingPicture(void);
+NSString *SGLockMotionPlayingAlbum(void);
+void SGLockMotionAnimatePlaying(void (^done)(NSString *error));
 // Under Moving artwork with lyrics, LyricsArtwork.x says whether the playing track has no synced lines (YES), so
 // LockScreenMotion.x shows its moving artwork plain, as Moving artwork does, or has them (NO), so it takes it off
 // for the lyrics' clips. Main queue.

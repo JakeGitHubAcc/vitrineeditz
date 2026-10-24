@@ -16,6 +16,7 @@
 #import <MediaPlayer/MediaPlayer.h>
 #import "Core/SGCore.h"
 #import "AnimatedArtwork.h"
+#import "SGCoverAnimator.h"
 #import "SGExtendedClip.h"
 #import "SGFluidClip.h"
 #import "SGMotionClip.h"
@@ -29,6 +30,7 @@ static const CGFloat kSameShape = 0.02;
 
 static NSString *sg_title;
 static NSString *sg_picture;   // the picture the track names, for the cover's clip
+static NSString *sg_album;     // the album's name, for the animate row
 static NSUInteger sg_walk;   // counts the tracks walked, so a poster that comes late is told from the newest
 static SGLockArtwork sg_choice;
 static NSInteger sg_coverStyle;   // the SGLockCoverStyle last read, so a change of it alone looks the track up again
@@ -176,6 +178,25 @@ static void showCover(NSString *picture) {
     SGLog(@"lock motion: no moving artwork, the cover's clip offered as %@", file.lastPathComponent);
 }
 
+NSString *SGLockMotionPlayingPicture(void) { return sg_picture; }
+NSString *SGLockMotionPlayingAlbum(void) { return sg_album.length ? sg_album : sg_title; }
+
+// The playing album's extended cover (SGExtendedClip.h), the frame the computer animates, sent as PNG.
+void SGLockMotionAnimatePlaying(void (^done)(NSString *error)) {
+    NSString *picture = sg_picture, *album = SGLockMotionPlayingAlbum(), *title = sg_title;
+    if (!picture || !sg_queue) {
+        done(@"Play a song from the album first.");
+        return;
+    }
+    CGSize size = SGLyricsClipSize(SGMotionPixels());
+    withCover(title, ^(CGImageRef cover) {
+        CGImageRef frame = SGExtendedClipFrame(cover, size);
+        NSData *png = frame ? UIImagePNGRepresentation([UIImage imageWithCGImage:frame]) : nil;
+        CGImageRelease(frame);
+        dispatch_async(dispatch_get_main_queue(), ^{ SGAnimatedCoverRequest(picture, album, png, done); });
+    });
+}
+
 %ctor {
     if (@available(iOS 26.0, *)) {
         sg_choice = SGLockScreenArtwork();
@@ -190,9 +211,12 @@ static void showCover(NSString *picture) {
             NSDictionary *metadata = [state.track.metadata isKindOfClass:NSDictionary.class] ? state.track.metadata : nil;
             sg_title = state.track.trackTitle;
             sg_picture = pictureOf(state.track, metadata);
+            sg_album = [metadata[@"album_title"] isKindOfClass:NSString.class] ? metadata[@"album_title"] : nil;
             sg_choice = SGLockScreenArtwork();
             return motionOn(sg_choice);
         } found:^(NSString *uri, NSURL *file) {
+            // An album with no moving artwork of its own plays the loop the user's computer made of its cover.
+            if (!file) file = SGAnimatedCoverFile(sg_picture);
             // Under the lyrics instead, and never as this file's extra too: both would fill the same 3:4 key.
             if (sg_choice == SGLockArtworkMotionLyrics) {
                 if (file) SGLyricsArtworkSetMotion(uri, file);
@@ -218,6 +242,13 @@ static void showCover(NSString *picture) {
                 sg_coverStyle = style;
                 [sg_follower restart];
             });
+        }];
+        // Posted on main. A loop saved for the playing album shows at once.
+        [NSNotificationCenter.defaultCenter addObserverForName:SGAnimatedCoverSavedNotification object:nil queue:nil
+                                                    usingBlock:^(NSNotification *note) {
+            if (!sg_picture || ![note.object isEqual:SGAnimatedCoverKey(sg_picture)]) return;
+            SGLog(@"lock motion: the playing album's animated cover was saved, the track looked up again");
+            [sg_follower restart];
         }];
         SGLog(@"lock motion: %@, the lock screen takes %@", motionOn(sg_choice) ? (sg_choice == SGLockArtworkEverySong ? @"on for every song" : @"on") : @"off",
               MPNowPlayingInfoCenter.supportedAnimatedArtworkKeys);

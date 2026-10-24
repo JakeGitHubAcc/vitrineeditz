@@ -1,0 +1,259 @@
+// SGCoverAnimator.h says what this is. Vitrine Animate answers four requests: POST /animate?key= with
+// the frame as PNG, GET /status?key= ({"state": queued, running, done, failed or unknown, "progress",
+// "position", "error"}), GET /clip?key= for the MP4, and GET /health. A sent cover is asked about every
+// few seconds while Spotify runs, which it keeps doing in the background while music plays; the frame is
+// kept until its loop is saved, so a computer restarted halfway is sent it again.
+#import <CommonCrypto/CommonDigest.h>
+#import <UIKit/UIKit.h>
+#import "Core/SGCore.h"
+#import "Settings/SGPageStyle.h"
+#import "SGCoverAnimator.h"
+
+NSNotificationName const SGAnimatedCoverSavedNotification = @"SGAnimatedCoverSavedNotification";
+
+static const NSTimeInterval kPollSeconds = 8;
+
+static NSMutableDictionary<NSString *, NSString *> *sg_status;   // by key, what the rows read out
+static NSMutableSet<NSString *> *sg_asking;   // keys with a request on the way, so a slow one is not doubled
+static NSTimer *sg_timer;
+
+// Application Support/Vitrine/AnimatedCovers, or the folder `sub` inside it.
+static NSURL *folder(NSString *sub) {
+    NSURL *support = [NSFileManager.defaultManager URLsForDirectory:NSApplicationSupportDirectory inDomains:NSUserDomainMask].firstObject;
+    NSURL *url = [support URLByAppendingPathComponent:@"Vitrine/AnimatedCovers" isDirectory:YES];
+    if (sub.length) url = [url URLByAppendingPathComponent:sub isDirectory:YES];
+    [NSFileManager.defaultManager createDirectoryAtURL:url withIntermediateDirectories:YES attributes:nil error:nil];
+    return url;
+}
+
+static NSURL *savedFor(NSString *key) { return [folder(nil) URLByAppendingPathComponent:[key stringByAppendingPathExtension:@"mp4"]]; }
+static NSURL *frameFor(NSString *key) { return [folder(@"sent") URLByAppendingPathComponent:[key stringByAppendingPathExtension:@"png"]]; }
+
+NSString *SGAnimatedCoverKey(NSString *picture) {
+    NSData *data = [picture dataUsingEncoding:NSUTF8StringEncoding];
+    unsigned char digest[CC_SHA256_DIGEST_LENGTH];
+    CC_SHA256(data.bytes, (CC_LONG)data.length, digest);
+    NSMutableString *key = [NSMutableString string];
+    for (int i = 0; i < 16; i++) [key appendFormat:@"%02x", digest[i]];
+    return key;
+}
+
+NSURL *SGAnimatedCoverFile(NSString *picture) {
+    if (!picture.length) return nil;
+    NSURL *file = savedFor(SGAnimatedCoverKey(picture));
+    return [NSFileManager.defaultManager fileExistsAtPath:file.path] ? file : nil;
+}
+
+NSString *SGAnimatedCoverServer(void) {
+    NSString *server = [NSUserDefaults.standardUserDefaults stringForKey:SGKeyAnimateServer];
+    return server.length ? server : nil;
+}
+
+static NSDictionary<NSString *, NSString *> *pending(void) {
+    NSDictionary *stored = [NSUserDefaults.standardUserDefaults dictionaryForKey:SGKeyAnimatePending];
+    return [stored isKindOfClass:NSDictionary.class] ? stored : @{};
+}
+
+static void setPending(NSString *key, NSString *album) {
+    NSMutableDictionary *all = [pending() mutableCopy];
+    all[key] = album;
+    [NSUserDefaults.standardUserDefaults setObject:all forKey:SGKeyAnimatePending];
+}
+
+static NSURL *endpoint(NSString *path, NSString *key) {
+    NSString *server = SGAnimatedCoverServer();
+    if (!server) return nil;
+    NSString *base = [server containsString:@"://"] ? server : [@"http://" stringByAppendingString:server];
+    return [NSURL URLWithString:[NSString stringWithFormat:@"%@/%@?key=%@", base, path, key]];
+}
+
+static void poll(void);
+
+// The timer runs while any cover is pending, and stops once none is.
+static void follow(void) {
+    if (sg_timer || !pending().count) return;
+    sg_timer = [NSTimer scheduledTimerWithTimeInterval:kPollSeconds repeats:YES block:^(NSTimer *timer) { poll(); }];
+    poll();
+}
+
+static void unfollow(NSString *key) {
+    NSMutableDictionary *all = [pending() mutableCopy];
+    [all removeObjectForKey:key];
+    [NSUserDefaults.standardUserDefaults setObject:all forKey:SGKeyAnimatePending];
+    [NSFileManager.defaultManager removeItemAtURL:frameFor(key) error:nil];
+    if (!all.count) {
+        [sg_timer invalidate];
+        sg_timer = nil;
+    }
+}
+
+// The JSON object the computer answered, or nil.
+static NSDictionary *answerIn(NSData *data, NSURLResponse *response, NSError *error) {
+    if (error || ![response isKindOfClass:NSHTTPURLResponse.class] || ((NSHTTPURLResponse *)response).statusCode != 200 || !data) return nil;
+    id object = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+    return [object isKindOfClass:NSDictionary.class] ? object : nil;
+}
+
+static void send(NSString *key, NSData *png, void (^done)(NSString *error)) {
+    NSURL *url = endpoint(@"animate", key);
+    if (!url) {
+        if (done) done(@"No computer address is entered.");
+        return;
+    }
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url cachePolicy:NSURLRequestReloadIgnoringLocalCacheData timeoutInterval:30];
+    request.HTTPMethod = @"POST";
+    [request setValue:@"image/png" forHTTPHeaderField:@"Content-Type"];
+    request.HTTPBody = png;
+    [sg_asking addObject:key];
+    sg_status[key] = @"Sending…";
+    [[NSURLSession.sharedSession dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        NSDictionary *answer = answerIn(data, response, error);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [sg_asking removeObject:key];
+            if (!answer) {
+                sg_status[key] = @"Computer not reachable";
+                SGLog(@"animate: %@ not sent (%@)", key, error.localizedDescription ?: @"no answer");
+                if (done) done([NSString stringWithFormat:@"Vitrine Animate did not answer at %@. Check that it is running on "
+                                                          @"your computer and that both are on the same Wi-Fi.", SGAnimatedCoverServer()]);
+                return;
+            }
+            SGLog(@"animate: %@ sent, %@", key, answer[@"state"]);
+            sg_status[key] = @"Waiting";
+            if (done) done(nil);
+        });
+    }] resume];
+}
+
+// Moves the finished loop into the kept folder, which the downloads' trimming never touches.
+static void fetch(NSString *key) {
+    NSURL *url = endpoint(@"clip", key);
+    if (!url || [sg_asking containsObject:key]) return;
+    [sg_asking addObject:key];
+    sg_status[key] = @"Downloading…";
+    [[NSURLSession.sharedSession downloadTaskWithURL:url completionHandler:^(NSURL *temporary, NSURLResponse *response, NSError *error) {
+        BOOL ok = !error && temporary && [response isKindOfClass:NSHTTPURLResponse.class] && ((NSHTTPURLResponse *)response).statusCode == 200;
+        NSURL *saved = savedFor(key);
+        if (ok) {
+            [NSFileManager.defaultManager removeItemAtURL:saved error:nil];
+            ok = [NSFileManager.defaultManager moveItemAtURL:temporary toURL:saved error:nil];
+        }
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [sg_asking removeObject:key];
+            if (!ok) {
+                sg_status[key] = @"Computer not reachable";
+                return;
+            }
+            SGLog(@"animate: %@ saved", key);
+            [sg_status removeObjectForKey:key];
+            unfollow(key);
+            [NSNotificationCenter.defaultCenter postNotificationName:SGAnimatedCoverSavedNotification object:key];
+        });
+    }] resume];
+}
+
+static void ask(NSString *key) {
+    NSURL *url = endpoint(@"status", key);
+    if (!url || [sg_asking containsObject:key]) return;
+    [sg_asking addObject:key];
+    NSURLRequest *request = [NSURLRequest requestWithURL:url cachePolicy:NSURLRequestReloadIgnoringLocalCacheData timeoutInterval:10];
+    [[NSURLSession.sharedSession dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        NSDictionary *answer = answerIn(data, response, error);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [sg_asking removeObject:key];
+            if (!pending()[key]) return;
+            NSString *state = [answer[@"state"] isKindOfClass:NSString.class] ? answer[@"state"] : nil;
+            if (!state) {
+                sg_status[key] = @"Computer not reachable";
+            } else if ([state isEqual:@"done"]) {
+                fetch(key);
+            } else if ([state isEqual:@"running"]) {
+                double progress = [answer[@"progress"] isKindOfClass:NSNumber.class] ? [answer[@"progress"] doubleValue] : 0;
+                sg_status[key] = [NSString stringWithFormat:@"Animating %.0f%%", MIN(MAX(progress, 0), 0.99) * 100];
+            } else if ([state isEqual:@"queued"]) {
+                NSInteger ahead = [answer[@"position"] isKindOfClass:NSNumber.class] ? [answer[@"position"] integerValue] : 0;
+                sg_status[key] = ahead > 0 ? [NSString stringWithFormat:@"Waiting, %ld ahead", (long)ahead] : @"Waiting";
+            } else if ([state isEqual:@"failed"]) {
+                sg_status[key] = @"Failed";
+                SGLog(@"animate: %@ failed on the computer: %@", key, answer[@"error"]);
+                unfollow(key);
+            } else {
+                // The computer restarted and lost it: the kept frame goes again.
+                NSData *png = [NSData dataWithContentsOfURL:frameFor(key)];
+                if (png) send(key, png, nil);
+                else unfollow(key);
+            }
+        });
+    }] resume];
+}
+
+static void poll(void) {
+    for (NSString *key in pending()) ask(key);
+}
+
+void SGAnimatedCoverRequest(NSString *picture, NSString *album, NSData *png, void (^done)(NSString *error)) {
+    if (!picture.length || !png.length) {
+        if (done) done(@"The album's cover is not loaded yet. Try again in a moment.");
+        return;
+    }
+    NSString *key = SGAnimatedCoverKey(picture);
+    [png writeToURL:frameFor(key) atomically:YES];
+    setPending(key, album ?: @"");
+    send(key, png, ^(NSString *error) {
+        if (!error) follow();
+        if (done) done(error);
+    });
+}
+
+void SGAnimatedCoverForget(NSString *picture) {
+    if (!picture.length) return;
+    NSString *key = SGAnimatedCoverKey(picture);
+    unfollow(key);
+    [sg_status removeObjectForKey:key];
+    [NSFileManager.defaultManager removeItemAtURL:savedFor(key) error:nil];
+}
+
+NSString *SGAnimatedCoverStatus(NSString *picture) {
+    if (!picture.length) return nil;
+    NSString *key = SGAnimatedCoverKey(picture);
+    if (SGAnimatedCoverFile(picture)) return @"Saved";
+    return sg_status[key] ?: (pending()[key] ? @"Waiting" : nil);
+}
+
+BOOL SGAnimatedCoverPending(NSString *picture) {
+    return picture.length && pending()[SGAnimatedCoverKey(picture)] != nil;
+}
+
+NSUInteger SGAnimatedCoverCount(void) {
+    NSArray *files = [NSFileManager.defaultManager contentsOfDirectoryAtPath:folder(nil).path error:nil];
+    return [files filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"self ENDSWITH '.mp4'"]].count;
+}
+
+void SGAnimatedCoverAskServer(void (^then)(void)) {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Your computer"
+        message:@"The address Vitrine Animate shows when it starts on your computer, such as 192.168.1.20:8790."
+        preferredStyle:UIAlertControllerStyleAlert];
+    [alert addTextFieldWithConfigurationHandler:^(UITextField *field) {
+        field.text = SGAnimatedCoverServer();
+        field.placeholder = @"192.168.1.20:8790";
+        field.keyboardType = UIKeyboardTypeURL;
+        field.autocorrectionType = UITextAutocorrectionTypeNo;
+        field.autocapitalizationType = UITextAutocapitalizationTypeNone;
+    }];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Save" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        NSString *server = [alert.textFields.firstObject.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+        while ([server hasSuffix:@"/"]) server = [server substringToIndex:server.length - 1];
+        if (!server.length) return;
+        [NSUserDefaults.standardUserDefaults setObject:server forKey:SGKeyAnimateServer];
+        poll();
+        if (then) then();
+    }]];
+    [SGTopController() presentViewController:alert animated:YES completion:nil];
+}
+
+%ctor {
+    sg_status = [NSMutableDictionary dictionary];
+    sg_asking = [NSMutableSet set];
+    // Covers sent before a relaunch are followed again once the app has settled.
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{ follow(); });
+}
