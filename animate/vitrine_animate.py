@@ -8,8 +8,9 @@ and artist; this server queues it and makes its loop:
 2. what moves: Wan 2.2 TI2V-5B in ComfyUI (workflow.json) animates the cover, and the optical flow of its
    frames, softened, with text and faces held, moves the cover's own pixels (motion.py), so its colors,
    detail and faces stay its own; the end turns back along the motion to the first frame;
-3. the lock screen's 3:4 frame around it (frame.py), what the phone's Text and Camera sway settings ask
-   for (effects.py), and a light film grain;
+3. the lock screen's 3:4 frame around it (frame.py); what the phone's Text and Camera sway settings ask
+   for, a starfield's drift, glints on shiny things and a slow shift of the light (effects.py); and a
+   light film grain;
 
 and keeps the MP4 in the clips folder, where the phone downloads it. One job runs at a time. Run it with
 ComfyUI's own Python (start.bat), which has everything it imports.
@@ -40,6 +41,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 import av
+import cv2
 import numpy as np
 from PIL import Image
 
@@ -56,18 +58,21 @@ KEY = re.compile(r"^[0-9a-f]{16,64}$")
 # Wan 2.2 TI2V-5B works in multiples of 32 and 4n+1 frames at 24 fps; a 640 square fits an 8 GB card, and
 # 73 frames is three seconds. Its frames are only measured for their motion (motion.py).
 SIDE, FRAMES, FPS = 640, 73, 24
+# How far motion eases to still toward a starfield, in pixels of the flow (motion.FLOW_SIZE).
+SKY_EASE = 4
 WIDTH, HEIGHT = SIDE, SIDE
 
 POSITIVE = (
-    "A nearly still cinemagraph of this picture with only slight, slow, natural movement. People stay in "
-    "place and only breathe gently: they do not sway, turn, walk or move their heads or arms. A soft breeze "
+    "A nearly still cinemagraph of this picture with only slight, slow, natural movement. The main person "
+    "stays in place and only breathes gently. A crowd or people in the background shift, sway and move "
+    "naturally, as a live audience does. A soft breeze "
     "stirs leaves, grass, hair and fabric a little. Clouds drift, water ripples, rain and snow fall, smoke "
     "curls, lights shimmer. Fixed static camera: no zoom, no pan, no tilt. Text, logos and lettering stay "
     "unchanged, and everything keeps its shape, colors and composition."
 )
 NEGATIVE = (
     "frozen, static image, no motion, still frame, "
-    "camera movement, zoom, pan, dolly, shaking, swaying, turning head, gesturing, walking, fast motion, sudden motion, morphing, warping, melting, "
+    "camera movement, zoom, pan, dolly, shaking, walking, fast motion, sudden motion, morphing, warping, melting, "
     "distortion, changing text, moving letters, new objects appearing, objects disappearing, scene change, "
     "cut, transition, flicker, strobing, blur, low quality, jpeg artifacts, deformed face, extra limbs, "
     "extra fingers, color shift, oversaturated"
@@ -238,7 +243,7 @@ def encode(frames, path):
         stream = container.add_stream("libx264", rate=FPS)
         stream.width, stream.height = frames[0].shape[1], frames[0].shape[0]
         stream.pix_fmt = "yuv420p"
-        stream.options = {"crf": "18", "preset": "slow", "movflags": "+faststart"}
+        stream.options = {"crf": "20", "preset": "slow", "movflags": "+faststart"}
         for frame in frames:
             for packet in stream.encode(av.VideoFrame.from_ndarray(frame, format="rgb24")):
                 container.mux(packet)
@@ -293,23 +298,48 @@ def work(jobs, comfy, lama, faces, keep_labels):
             moving = erased if wording == "hide" else shown
             extended = Extended(erased if erased is not None else shown, lama)
             moving.resize((SIDE, SIDE), Image.LANCZOS).save(os.path.join(inputs, image_name))
+            base = np.asarray(erased if wording == "fade" else moving, dtype=np.float32)
+            # What no effect may land on: text, its whole box, and faces.
+            side = shown.width
+            covered = np.zeros((side, side), np.float32)
+            for box in ([] if wording == "hide" else text):
+                covered = np.maximum(covered, motion.soft_box(side, box, motion.TEXT_PAD, 0))
+            for box in people:
+                covered = np.maximum(covered, motion.soft_box(side, box, motion.FACE_PAD, 0))
+            stars = effects.starfield(base, covered)
+            sky = stars[2] if stars else np.zeros((side, side), np.float32)
+            shiny = effects.glints(base, np.maximum(covered, sky))
+            say(f"{'a starfield' if stars else 'no starfield'}, {len(shiny)} glints")
             seed = int(key[:12], 16) % (2 ** 31) + random.randint(0, 999)
             frames = comfy.run(image_name, seed)
             pictures = [np.asarray(Image.open(f).convert("RGB"), dtype=np.float32) for f in frames]
             # The model's first frame is a little off from the rest (Wan's VAE makes it alone): measured from
-            # the second.
-            steps = motion.loop(pictures[1:], [] if wording == "hide" else text, people)
-            if wording == "fade" or sway:
-                steps = effects.lengthened(steps)
-            base = np.asarray(erased if wording == "fade" else moving, dtype=np.float32)
+            # the second. The starfield holds still under its own drift, and what moves in front of it eases to
+            # still toward it rather than at its edge, where a stop pulled the edge out into a streak.
+            still_sky = np.asarray(Image.fromarray((sky * 255).astype(np.uint8)).resize((motion.FLOW_SIZE, motion.FLOW_SIZE)), dtype=np.float32) / 255
+            still_sky = np.maximum(still_sky, cv2.GaussianBlur(still_sky, (0, 0), SKY_EASE))
+            steps = effects.lengthened(motion.loop(pictures[1:], [] if wording == "hide" else text, people, still_sky))
             still = np.asarray(shown, dtype=np.float32)
+            # The light leaves text alone, where it is in the frame.
+            text_in_frame = np.zeros((OUT_H, OUT_W), np.float32)
+            text_in_frame[extended.top:extended.top + side] = covered if text else 0
+            patches = effects.lights((OUT_H, OUT_W))
             n = len(steps)
             clip = []
             for i, step in enumerate(steps):
                 cover_frame = motion.warped(base, step)
+                if stars:
+                    cover_frame = effects.with_stars(cover_frame, stars, i, n)
                 if wording == "fade":
                     cover_frame = effects.faded(cover_frame, still, where, effects.shown_text(i, n))
                 frame = extended.frame(cover_frame)
+                # A glint rides on what it is on: a point of the cover shows where the flow brought it.
+                places = []
+                for x, y in shiny:
+                    fx, fy = step[min(int(y / side * motion.FLOW_SIZE), motion.FLOW_SIZE - 1), min(int(x / side * motion.FLOW_SIZE), motion.FLOW_SIZE - 1)]
+                    places.append((x - fx * side, y - fy * side))
+                frame = effects.with_glints(frame, places, i, n, offset=(0, extended.top))
+                frame = effects.lit(frame, patches, i, n, text_in_frame)
                 clip.append(effects.swayed(frame, i, n) if sway else frame)
             # The last frame is the first; its grain is too, so the two are the same frame.
             seeds = list(range(n))

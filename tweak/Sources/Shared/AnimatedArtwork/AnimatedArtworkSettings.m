@@ -22,7 +22,7 @@ static void tell(NSString *title, NSString *message) {
     [SGTopController() presentViewController:alert animated:YES completion:nil];
 }
 
-static void sendPlaying(void) {
+void SGAnimatedCoverSendPlaying(void) {
     SGLockMotionAnimatePlaying(^(NSString *error) {
         if (error) tell(@"Not sent", error);
     });
@@ -42,7 +42,7 @@ static void animateTapped(void) {
     }
     BOOL saved = SGAnimatedCoverFile(picture) != nil, waiting = SGAnimatedCoverPending(picture);
     if (!saved && !waiting) {
-        sendPlaying();
+        SGAnimatedCoverSendPlaying();
         return;
     }
     UIAlertController *sheet = [UIAlertController alertControllerWithTitle:SGLockMotionPlayingAlbum()
@@ -51,7 +51,7 @@ static void animateTapped(void) {
     if (saved) {
         [sheet addAction:[UIAlertAction actionWithTitle:@"Animate Again" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
             SGAnimatedCoverForget(picture);
-            sendPlaying();
+            SGAnimatedCoverSendPlaying();
         }]];
     }
     [sheet addAction:[UIAlertAction actionWithTitle:saved ? @"Delete Animated Cover" : @"Stop Waiting" style:UIAlertActionStyleDestructive
@@ -87,7 +87,7 @@ NSArray *SGLockScreenMotionRows(void) {
         star.visible = ^BOOL { return SGLockScreenArtwork() != SGLockArtworkOff; };
         SGModRow *animate = SGStatActionRow(@"Animate this album's cover",
                                             @"Your computer makes a moving version of the playing album's cover with Vitrine Animate. "
-                                            @"It is saved on this iPhone and plays, on the lock screen and behind the player, for "
+                                            @"It is saved on this iPhone and plays, on the lock screen, behind the player and on the album's page, for "
                                             @"every song of the album that has no Canvas or animated cover, with the computer off",
                                             ^NSString *{ return SGAnimatedCoverStatus(SGLockMotionPlayingPicture()) ?: @"Not animated"; },
                                             ^{ animateTapped(); });

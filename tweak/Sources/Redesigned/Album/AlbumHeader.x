@@ -27,7 +27,10 @@
 #import <AVFoundation/AVFoundation.h>
 #import "Core/SGCore.h"
 #import "Redesigned/Kit/SGRKit.h"
+#import "Redesigned/ContextMenu/ContextMenu.h"
+#import "Settings/SGPageStyle.h"
 #import "Shared/AnimatedArtwork/AnimatedArtwork.h"
+#import "Shared/AnimatedArtwork/SGCoverAnimator.h"
 #import "Album.h"
 
 // How much of the cover's height the dissolve into the field covers, and the scrim over the top of it that
@@ -121,8 +124,11 @@ static void watch(UIView *view, const void *key, void (^laidOut)(UIView *view)) 
 // The cover in Spotify's artwork view, and every cover it puts there afterward: the hero keeps itself
 // right, rather than being handed a picture on each of the header's passes and staying empty between them.
 - (void)followCover:(UIImageView *)source;
-// Apple Music's animated cover over the picture, where the album has one. The same album again is a no-op.
+// Apple Music's animated cover over the picture, where the album has one, else the one the user's computer
+// made of it (SGCoverAnimator.h). The same album again is a no-op.
 - (void)playMotionForArtist:(NSString *)artist album:(NSString *)album;
+// The album the page is, as its header reads it; nil until then.
+@property (nonatomic, readonly, copy) NSString *artist, *album;
 @end
 
 @implementation SGRAlbumHero {
@@ -142,6 +148,8 @@ static void *kReadyContext = &kReadyContext;
     self.userInteractionEnabled = NO;
     self.accessibilityElementsHidden = YES;
     self.clipsToBounds = YES;
+    [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(sgr_animatedCoverSaved)
+                                               name:SGAnimatedCoverSavedNotification object:nil];
 
     _picture = [[UIImageView alloc] initWithFrame:self.bounds];
     _picture.contentMode = UIViewContentModeScaleAspectFill;
@@ -222,8 +230,17 @@ static void *kReadyContext = &kReadyContext;
 
 - (void)playMotionForArtist:(NSString *)artist album:(NSString *)album {
     NSString *key = artist.length && album.length ? [NSString stringWithFormat:@"%@\n%@", artist, album] : nil;
-    if (!key || [key isEqualToString:_motionAlbum] || !SGEnabled(SGRKeyAlbumMotion) || !SGMotionAppleMusicOn()) return;
+    if (key) {
+        _artist = [artist copy];
+        _album = [album copy];
+    }
+    if (!key || [key isEqualToString:_motionAlbum] || !SGEnabled(SGRKeyAlbumMotion)) return;
     _motionAlbum = key;
+    if (!SGMotionAppleMusicOn()) {
+        NSURL *made = SGAnimatedCoverFileForAlbum(artist, album);
+        if (made) [self showMotion:made];
+        return;
+    }
     // The player's size: at the screen's full width a square cover ran to the 1920 stream, tens of MB.
     CGFloat pixels = SGMotionPixels();
     __weak SGRAlbumHero *weakSelf = self;
@@ -231,8 +248,16 @@ static void *kReadyContext = &kReadyContext;
     // filled into it lost its sides. An album with only a square clip gets that one.
     SGMotionAlbumCover(artist, album, SGMotionTall, pixels, ^(NSURL *file) {
         SGRAlbumHero *hero = weakSelf;
+        file = file ?: SGAnimatedCoverFileForAlbum(artist, album);
         if (hero && file && [hero->_motionAlbum isEqualToString:key]) [hero showMotion:file];
     });
+}
+
+// A cover the user's computer has just made for this album, from its ⋯ or a song of it, comes in at once.
+- (void)sgr_animatedCoverSaved {
+    if (_motion || !_artist || !SGEnabled(SGRKeyAlbumMotion)) return;
+    NSURL *made = SGAnimatedCoverFileForAlbum(_artist, _album);
+    if (made) [self showMotion:made];
 }
 
 // Muted and looping, over the picture and under the two gradients. The picture stays under it until the
@@ -615,9 +640,33 @@ static void applyPage(UIView *page) {
 }
 %end
 
+// The album page's ⋯ gets the album's animated cover (SGCoverAnimator.h): the page showing is the one whose
+// hero is in the ⋯'s window, the album pages under it on the navigation stack being out of it.
+static NSArray<UIMenuElement *> *pageItems(UIView *more) {
+    __block SGRAlbumHero *hero = nil;
+    if (more.window) SGForEachView(more.window, ^(UIView *view) {
+        if ([view isKindOfClass:SGRAlbumHero.class] && !view.hidden) hero = (SGRAlbumHero *)view;
+    });
+    NSString *artist = hero.artist, *album = hero.album;
+    UIImage *cover = hero.picture.image;
+    if (!artist || !album || !cover) return @[];
+    NSString *picture = SGAnimatedCoverAlbumPicture(artist, album);
+    return SGAnimatedCoverMenu(picture, ^{
+        NSData *png = UIImagePNGRepresentation(cover);
+        SGAnimatedCoverRequest(picture, album, artist, png, ^(NSString *error) {
+            if (!error) return;
+            UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Not sent" message:error
+                                                                    preferredStyle:UIAlertControllerStyleAlert];
+            [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleCancel handler:nil]];
+            [SGTopController() presentViewController:alert animated:YES completion:nil];
+        });
+    });
+}
+
 %ctor {
     if (!SGRedesignedUI()) return;
     %init;
+    SGRSystemMenuAddPageItems(^NSArray<UIMenuElement *> *(UIView *more) { return pageItems(more); });
     SGRequireClasses(@[
         @"_TtC28CreativeWorkPlatform_PageKit24CreativeWorkTemplateView",
         @"_TtC28EncoreConsumerMobile_BaseKit14PlayButtonView",

@@ -9,12 +9,16 @@
 //                             three, named for what it switches to
 //     Lyrics Source           a song's lyrics from another source than the one the order chose (issue #67), in a
 //                             popover from the ⋯ that asks every source and lists each as it answers
+//     Animated Cover          the playing album's cover animated on the user's computer, and its two settings
+//                             (Shared/AnimatedArtwork/SGCoverAnimator.h)
 //
 // The item says under its name what is not as Spotify plays it, so the menu reads as a settings summary.
 #import "Core/SGCore.h"
 #import "Redesigned/ContextMenu/ContextMenu.h"
 #import "Shared/Player/PlayerState.h"
 #import "Shared/Player/SpeedPitch.h"
+#import "Shared/AnimatedArtwork/AnimatedArtwork.h"
+#import "Shared/AnimatedArtwork/SGCoverAnimator.h"
 #import "Shared/Lyrics/Lyrics.h"
 #import "Shared/LyricsSources/LyricsSources.h"
 #import "Settings/SGPageStyle.h"
@@ -221,6 +225,7 @@ static NSArray<UIMenuElement *> *playerItems(void) {
     }
     UIAction *lyrics = lyricsSourceItem();
     if (lyrics) [items addObject:lyrics];
+    [items addObjectsFromArray:SGAnimatedCoverMenu(SGLockMotionPlayingPicture(), ^{ SGAnimatedCoverSendPlaying(); })];
     return items;
 }
 
