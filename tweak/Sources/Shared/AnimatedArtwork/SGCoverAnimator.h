@@ -19,7 +19,7 @@ NSString *SGAnimatedCoverKey(NSString *picture);
 NSURL *SGAnimatedCoverFile(NSString *picture);
 // Sends `png`, the cover, to the computer and follows it until its loop is saved. `done` gets nil
 // once the computer has it, else what went wrong.
-void SGAnimatedCoverRequest(NSString *picture, NSString *album, NSData *png, void (^done)(NSString *error));
+void SGAnimatedCoverRequest(NSString *picture, NSString *album, NSString *artist, NSData *png, void (^done)(NSString *error));
 // Stops following a sent cover, or deletes a saved one.
 void SGAnimatedCoverForget(NSString *picture);
 // What a settings row reads out for the picture: Saved, Sending…, Waiting, Animating 40%, the computer
