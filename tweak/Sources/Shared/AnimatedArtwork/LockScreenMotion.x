@@ -16,6 +16,7 @@
 #import <MediaPlayer/MediaPlayer.h>
 #import "Core/SGCore.h"
 #import "AnimatedArtwork.h"
+#import "SGExtendedClip.h"
 #import "SGFluidClip.h"
 #import "SGMotionClip.h"
 #import "Shared/LockScreenLyrics/LockScreenLyrics.h"
@@ -30,6 +31,7 @@ static NSString *sg_title;
 static NSString *sg_picture;   // the picture the track names, for the cover's clip
 static NSUInteger sg_walk;   // counts the tracks walked, so a poster that comes late is told from the newest
 static SGLockArtwork sg_choice;
+static NSInteger sg_coverStyle;   // the SGLockCoverStyle last read, so a change of it alone looks the track up again
 static dispatch_queue_t sg_queue;   // cuts clips and makes the cover's, one at a time
 static SGMotionFollower *sg_follower;
 
@@ -142,17 +144,28 @@ static NSString *pictureOf(SPTPlayerTrack *track, NSDictionary *metadata) {
     return SGURIString(track.URI);
 }
 
-// The cover's clip is 3:4 (SGLyricsClipSize), so it goes only where the system lists that key.
+// The share of a 3:4 clip's width the lock screen shows: it fills the screen's height and cuts the sides
+// off a taller screen. Main queue.
+static CGFloat visibleWidth(CGSize clip) {
+    CGSize screen = UIScreen.mainScreen.bounds.size;
+    CGFloat shape = MIN(screen.width, screen.height) / MAX(MAX(screen.width, screen.height), 1);
+    return MIN(shape / (clip.width / clip.height), 1);
+}
+
+// The cover's clip is 3:4 (SGLyricsClipSize), so it goes only where the system lists that key. Its style
+// is read as the track is looked up, and each style keeps its own file.
 API_AVAILABLE(ios(26.0))
 static void showCover(NSString *picture) {
     if (![MPNowPlayingInfoCenter.supportedAnimatedArtworkKeys containsObject:MPNowPlayingInfoProperty3x4AnimatedArtwork]) return;
-    NSURL *file = SGMotionMadeFile([@"fluid\n" stringByAppendingString:picture]);
+    BOOL extended = SGInt(SGKeyLockScreenCoverStyle, SGLockCoverMovingBlur) == SGLockCoverExtended;
+    NSURL *file = SGMotionMadeFile([(extended ? @"extended\n" : @"fluid\n") stringByAppendingString:picture]);
     NSString *title = sg_title;
     CGSize size = SGLyricsClipSize(SGMotionPixels());
+    CGFloat visible = visibleWidth(size);
     MPMediaItemAnimatedArtwork *artwork = [[MPMediaItemAnimatedArtwork alloc] initWithArtworkID:file.lastPathComponent
         previewImageRequestHandler:^(CGSize wanted, void (^completion)(UIImage *)) {
             withCover(title, ^(CGImageRef cover) {
-                CGImageRef frame = SGFluidClipFrame(cover, size);
+                CGImageRef frame = extended ? SGExtendedClipFrame(cover, size, visible) : SGFluidClipFrame(cover, size);
                 completion(frame ? filled([UIImage imageWithCGImage:frame], wanted) : nil);
                 CGImageRelease(frame);
             });
@@ -160,7 +173,8 @@ static void showCover(NSString *picture) {
         videoAssetFileURLRequestHandler:^(CGSize wanted, void (^completion)(NSURL *)) {
             withCover(title, ^(CGImageRef cover) {
                 CFAbsoluteTime start = CFAbsoluteTimeGetCurrent();
-                BOOL ok = [NSFileManager.defaultManager fileExistsAtPath:file.path] || SGFluidClipWrite(file, cover, size);
+                BOOL ok = [NSFileManager.defaultManager fileExistsAtPath:file.path]
+                    || (extended ? SGExtendedClipWrite(file, cover, size, visible) : SGFluidClipWrite(file, cover, size));
                 SGLog(@"lock motion: the cover's clip %@ %@ in %.0f ms", file.lastPathComponent, ok ? @"ready" : @"not written",
                       (CFAbsoluteTimeGetCurrent() - start) * 1000);
                 completion(ok ? file : nil);
@@ -173,6 +187,7 @@ static void showCover(NSString *picture) {
 %ctor {
     if (@available(iOS 26.0, *)) {
         sg_choice = SGLockScreenArtwork();
+        sg_coverStyle = SGInt(SGKeyLockScreenCoverStyle, SGLockCoverMovingBlur);
         sg_queue = dispatch_queue_create("spotifyglass.lockscreen.motion", DISPATCH_QUEUE_SERIAL);
         // Each walk takes the last one's clip off first, so the lock screen falls back to the still cover.
         sg_follower = [[SGMotionFollower alloc] initWithBegin:^BOOL(NSString *uri, SPTPlayerState *state) {
@@ -203,9 +218,12 @@ static void showCover(NSString *picture) {
             SGPrefsChanged();
             dispatch_async(dispatch_get_main_queue(), ^{
                 SGLockArtwork choice = SGLockScreenArtwork();
-                if (choice == sg_choice) return;
-                SGLog(@"lock motion: the choice changed to %ld, the playing track looked up again", (long)choice);
+                NSInteger style = SGInt(SGKeyLockScreenCoverStyle, SGLockCoverMovingBlur);
+                if (choice == sg_choice && style == sg_coverStyle) return;
+                SGLog(@"lock motion: the choice changed to %ld, the cover style to %ld, the playing track looked up again",
+                      (long)choice, (long)style);
                 sg_choice = choice;
+                sg_coverStyle = style;
                 [sg_follower restart];
             });
         }];
