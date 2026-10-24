@@ -20,7 +20,7 @@ typedef NS_ENUM(NSInteger, SGLockArtwork) {
 // Off below iOS 26, which has no animated artwork on the lock screen.
 SGLockArtwork SGLockScreenArtwork(void);
 // The playing track's picture (the key its album's covers are kept by) and its album's name, nil before a
-// track plays; and the playing album's extended cover sent to the user's computer to animate
+// track plays; and the playing album's cover sent to the user's computer to animate
 // (SGCoverAnimator.h), `done` getting nil once it has it or what went wrong. LockScreenMotion.x. Main queue.
 NSString *SGLockMotionPlayingPicture(void);
 NSString *SGLockMotionPlayingAlbum(void);

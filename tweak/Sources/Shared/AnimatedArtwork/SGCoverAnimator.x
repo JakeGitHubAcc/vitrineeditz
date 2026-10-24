@@ -1,7 +1,7 @@
 // SGCoverAnimator.h says what this is. Vitrine Animate answers four requests: POST /animate?key= with
-// the frame as PNG, GET /status?key= ({"state": queued, running, done, failed or unknown, "progress",
+// the cover as PNG, GET /status?key= ({"state": queued, running, done, failed or unknown, "progress",
 // "position", "error"}), GET /clip?key= for the MP4, and GET /health. A sent cover is asked about every
-// few seconds while Spotify runs, which it keeps doing in the background while music plays; the frame is
+// few seconds while Spotify runs, which it keeps doing in the background while music plays; the cover is
 // kept until its loop is saved, so a computer restarted halfway is sent it again.
 #import <CommonCrypto/CommonDigest.h>
 #import <UIKit/UIKit.h>
