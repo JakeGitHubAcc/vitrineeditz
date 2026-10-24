@@ -35,7 +35,7 @@
 }
 
 - (void)animatedCoverSaved:(NSNotification *)note {
-    if (!_picture || ![note.object isEqual:SGAnimatedCoverKey(_picture)]) return;
+    if (!_picture) return;
     SGLog(@"motion: the animated cover of %@ was saved, walked again", _track);
     [self restart];
 }
@@ -61,13 +61,21 @@
     NSDictionary *metadata = [state.track.metadata isKindOfClass:NSDictionary.class] ? state.track.metadata : nil;
     NSString *picture = SGAnimatedCoverPicture(uri, metadata);
     _picture = picture;
+    NSString *album = [metadata[@"album_title"] isKindOfClass:NSString.class] ? metadata[@"album_title"] : nil;
+    NSString *artist = [metadata[@"album_artist_name"] isKindOfClass:NSString.class] ? metadata[@"album_artist_name"]
+                     : [metadata[@"artist_name"] isKindOfClass:NSString.class] ? metadata[@"artist_name"] : state.track.artistName;
     __weak SGMotionFollower *weakSelf = self;
     SGMotionClipFor(uri, canvas, state.track.artistName, metadata[@"album_title"], SGMotionTall, SGMotionPixels(), ^(NSURL *file, NSString *source) {
         SGMotionFollower *follower = weakSelf;
         if (!follower || walk != follower->_walk) return;
         follower->_source = source;
-        // The source stays none, so a Canvas that comes late still takes over from the animated cover.
-        if (!file) file = SGAnimatedCoverFile(picture);
+        // The source stays none, so a Canvas that comes late still takes over from the animated cover. One made
+        // from the album's page is found by the album's name; one made from a song is listed under it.
+        if (!file) {
+            file = SGAnimatedCoverFile(picture);
+            if (file) SGAnimatedCoverList(picture, artist, album);
+            else file = SGAnimatedCoverFileForAlbum(artist, album);
+        }
         follower->_found(uri, file);
         [follower fetchAhead];
     });

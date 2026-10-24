@@ -56,6 +56,8 @@ static __weak SGRMenuSession *sg_requesting;
 static CFTimeInterval sg_requestedAt;
 // The session whose sheet is in the mod's own window, and the presentation the mod is making itself.
 static __weak SGRMenuSession *sg_hosted;
+// Features' items for a page's ⋯.
+static NSMutableArray<SGRPageMenuItems> *sg_pageItems;
 static BOOL sg_redirecting;
 
 // The player's quick items: what the item says, its symbol, the title of Spotify's row it fires (compared
@@ -435,6 +437,8 @@ static void raiseHost(UIWindow *window) {
     NSString *_quickShown;
     NSTimer *_poll;
     CFTimeInterval _openedAt, _askedAt;
+    // The page's own items, asked once a menu (SGRSystemMenuAddPageItems).
+    NSArray<UIMenuElement *> *_pageElements;
     // The menu is asked for while the sheet's presentation is still under way, which UIKit takes only some of
     // the time; if it does not come, it is asked for again once the sheet is up.
     BOOL _early, _wasEarly;
@@ -618,10 +622,10 @@ static void raiseHost(UIWindow *window) {
 
 #pragma mark the menu
 
-// A page's ⋯: Spotify's rows, waited for. The player's: the quick row, the player's items and More, none of
-// them waited for; More's rows are, when More is opened before the sheet has them.
+// A page's ⋯: the page's own items, then Spotify's rows, waited for. The player's: the quick row, the player's
+// items and More, none of them waited for; More's rows are, when More is opened before the sheet has them.
 - (UIMenu *)menu {
-    if (!self.items) return [UIMenu menuWithChildren:@[[self deferredRows]]];
+    if (!self.items) return [UIMenu menuWithChildren:[[self pageElements] arrayByAddingObject:[self deferredRows]]];
     NSMutableArray<UIMenuElement *> *children = [NSMutableArray array];
     UIMenu *quick = [self quickRow];
     if (quick) [children addObject:quick];
@@ -630,6 +634,16 @@ static void raiseHost(UIWindow *window) {
     UIMenu *more = [UIMenu menuWithTitle:@"More" image:[UIImage systemImageNamed:@"ellipsis.circle"] identifier:kMoreMenu options:0 children:@[[self deferredRows]]];
     [children addObject:inlineGroup(@[more])];
     return [UIMenu menuWithTitle:@"" image:nil identifier:kTopMenu options:0 children:children];
+}
+
+// The page's own items (SGRSystemMenuAddPageItems), asked once a menu, in a group of their own.
+- (NSArray<UIMenuElement *> *)pageElements {
+    if (!_pageElements) {
+        NSMutableArray<UIMenuElement *> *ours = [NSMutableArray array];
+        for (SGRPageMenuItems items in sg_pageItems) [ours addObjectsFromArray:items(self.anchor) ?: @[]];
+        _pageElements = ours.count ? @[inlineGroup(ours)] : @[];
+    }
+    return _pageElements;
 }
 
 // The sheet's rows as menu items, but for the quick ones. Uncached: every menu reads the sheet it was opened with.
@@ -874,7 +888,7 @@ static NSString *storedKey(NSString *kind) {
     // A page's menu: its anchor's menu becomes the rows themselves. UIKit builds the menu it shows again from the
     // anchor's (the one asked for while the sheet came up is never on screen), so the menu comes up whole instead of
     // from its loading row, growing down as the rows come (device, 2026-10-23).
-    if (!self.items && self.anchor && !self.ended) self.anchor.menu = [UIMenu menuWithChildren:[self rowElements]];
+    if (!self.items && self.anchor && !self.ended) self.anchor.menu = [UIMenu menuWithChildren:[[self pageElements] arrayByAddingObjectsFromArray:[self rowElements]]];
 
     NSArray<dispatch_block_t> *waiting = _whenRead;
     _whenRead = [NSMutableArray array];
@@ -1116,6 +1130,11 @@ BOOL SGPlayerMenuReplaced(UIViewController *menu) {
 }
 
 #pragma mark - the ⋯
+
+void SGRSystemMenuAddPageItems(SGRPageMenuItems items) {
+    if (!sg_pageItems) sg_pageItems = [NSMutableArray array];
+    [sg_pageItems addObject:[items copy]];
+}
 
 void SGRSystemMenuWatch(UIView *button, SGRMenuItems items, SGRMenuKind kind) {
     if (![button isKindOfClass:UIControl.class]) return;

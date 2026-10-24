@@ -1,8 +1,10 @@
 """The cover's own pixels moved the way the model's clip moves. The model's frames are only measured: the
 optical flow from each back to its first says where every point went, and the sharp cover is warped along
 it. So the clip has the cover's exact colors and detail, and nothing in it is drawn anew. The motion is
-softened, capped and shaped: text does not move, faces move only as a whole (never reshaped), and the
-cover's edges stay put, where the still frame around it meets them. The end turns back to the start along
+softened, capped and shaped: a person (a face found, and the body under it) moves only a little, the rest
+(a crowd, trees, water) as freely as the model moved it; text does not move, faces move only as a whole
+(never reshaped), anything held still stays (a starfield, effects.py), and the cover's edges stay put, where
+the still frame around it meets them. The end turns back to the start along
 the motion itself, so the last frame is the cover as it is, the first frame.
 """
 import cv2
@@ -12,8 +14,13 @@ from scipy.ndimage import gaussian_filter, gaussian_filter1d
 
 # The flow is measured and shaped at this size: the motion is smooth, and smaller is steadier and quicker.
 FLOW_SIZE = 320
-# How much of the model's motion is kept, and the farthest any point moves, as a share of the cover's side.
-MOTION, MAX_SHIFT = 0.6, 0.008
+# How much of the model's motion is kept, and the farthest any point moves, as a share of the cover's side:
+# for a person, and for everything else. A crowd's or a tree's motion reads as natural only when it is
+# free; small and far, their detail does not give the warp away.
+MOTION_PERSON, MAX_PERSON = 0.5, 0.006
+MOTION_FREE, MAX_FREE = 1.0, 0.02
+# A person's reach from a face found: the face's widths sideways, its heights up and down, the body below.
+BODY_WIDE, BODY_UP, BODY_DOWN = 1.8, 1.2, 5.0
 # The flow's smoothing over the picture (a share of its side) and over time (frames), which takes out the
 # model's wobble and the flow's noise.
 SPACE_SMOOTH, TIME_SMOOTH = 0.012, 1.2
@@ -99,11 +106,29 @@ def without_camera(flow):
     return (flow - camera).astype(np.float32)
 
 
-def shaped(flow, text_boxes, face_boxes):
-    """The flow without the camera's part, softened and smoothed, with text still, faces moving whole and the
-    edges still. Boxes are in shares of the cover's side."""
+def person(size, box):
+    """A soft mask at `size` over the person a face belongs to: the face and the body below it."""
+    l, t, r, b = box
+    w, h = r - l, b - t
+    cx = (l + r) / 2
+    top, bottom = t - BODY_UP * h, b + BODY_DOWN * h
+    y, x = np.mgrid[0:size, 0:size].astype(np.float32) / size
+    cy, ry, rx = (top + bottom) / 2, (bottom - top) / 2, BODY_WIDE * w
+    inside = ((x - cx) / max(rx, 1e-6)) ** 2 + ((y - cy) / max(ry, 1e-6)) ** 2 <= 1
+    return np.clip(gaussian_filter(inside.astype(np.float32), 2 * FEATHER * size), 0, 1)
+
+
+def shaped(flow, text_boxes, face_boxes, still=None):
+    """The flow without the camera's part, softened and smoothed: people moving a little and the rest more,
+    text still, faces moving whole, `still` (1 where nothing moves, at FLOW_SIZE) and the edges still. Boxes
+    are in shares of the cover's side."""
     size = FLOW_SIZE
-    flow = without_camera(flow) * MOTION
+    calm = np.zeros((size, size), np.float32)
+    for box in face_boxes:
+        calm = np.maximum(calm, person(size, box))
+    amount = MOTION_FREE + (MOTION_PERSON - MOTION_FREE) * calm
+    most = (MAX_FREE + (MAX_PERSON - MAX_FREE) * calm)[None, ..., None]
+    flow = without_camera(flow) * amount[None, ..., None]
     flow = gaussian_filter(flow, (0, SPACE_SMOOTH * size, SPACE_SMOOTH * size, 0))
     smoothed = gaussian_filter1d(flow, TIME_SMOOTH, axis=0, mode="nearest")
     # The first frames keep to the measured flow, so the clip starts from the cover itself.
@@ -120,9 +145,11 @@ def shaped(flow, text_boxes, face_boxes):
         free = np.minimum(free, 1 - soft_box(size, box, TEXT_PAD, FEATHER))
     ramp = np.clip(np.minimum(np.arange(size), size - 1 - np.arange(size)) / (EDGE_STILL * size), 0, 1).astype(np.float32)
     free = free * ramp[:, None] * ramp[None, :]
+    if still is not None:
+        free = free * (1 - still)
     flow = flow * free[None, ..., None]
     reach = np.linalg.norm(flow, axis=-1, keepdims=True)
-    return flow * np.minimum(1, MAX_SHIFT / np.maximum(reach, 1e-9))
+    return (flow * np.minimum(1, most / np.maximum(reach, 1e-9))).astype(np.float32)
 
 
 def looped(flow):
@@ -152,7 +179,7 @@ def grained(frame, seed):
     return frame + (GRAIN * noise * (0.35 + 2.6 * luma * (1 - luma)))[..., None]
 
 
-def loop(frames, text_boxes, face_boxes):
+def loop(frames, text_boxes, face_boxes, still=None):
     """The looped flow of the model's `frames`, shaped, one per frame of the clip: warped() moves the cover
     by each."""
-    return looped(shaped(flows(frames), text_boxes, face_boxes))
+    return looped(shaped(flows(frames), text_boxes, face_boxes, still))

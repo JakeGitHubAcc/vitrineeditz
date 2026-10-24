@@ -26,6 +26,16 @@ static NSURL *folder(NSString *sub) {
     return url;
 }
 
+// {artist\nalbum, folded: key}, kept beside the loops so it goes with them.
+static NSURL *listFile(void) { return [folder(nil) URLByAppendingPathComponent:@"albums.plist"]; }
+
+static NSString *albumName(NSString *artist, NSString *album) {
+    if (!artist.length || !album.length) return nil;
+    NSString *joined = [NSString stringWithFormat:@"%@\n%@", artist, album];
+    joined = [joined stringByFoldingWithOptions:NSCaseInsensitiveSearch | NSDiacriticInsensitiveSearch locale:nil];
+    return [joined stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
+}
+
 static NSURL *savedFor(NSString *key) { return [folder(nil) URLByAppendingPathComponent:[key stringByAppendingPathExtension:@"mp4"]]; }
 static NSURL *frameFor(NSString *key) { return [folder(@"sent") URLByAppendingPathComponent:[key stringByAppendingPathExtension:@"png"]]; }
 // The album's name and artist, and the text and sway settings, sent with the cover, kept beside it as a
@@ -52,6 +62,32 @@ NSString *SGAnimatedCoverKey(NSString *picture) {
 NSURL *SGAnimatedCoverFile(NSString *picture) {
     if (!picture.length) return nil;
     NSURL *file = savedFor(SGAnimatedCoverKey(picture));
+    return [NSFileManager.defaultManager fileExistsAtPath:file.path] ? file : nil;
+}
+
+NSString *SGAnimatedCoverAlbumPicture(NSString *artist, NSString *album) {
+    NSString *name = albumName(artist, album);
+    return name ? [@"spotify-album:" stringByAppendingString:name] : nil;
+}
+
+void SGAnimatedCoverList(NSString *picture, NSString *artist, NSString *album) {
+    NSString *name = albumName(artist, album);
+    if (!name || !picture.length) return;
+    NSString *key = SGAnimatedCoverKey(picture);
+    NSMutableDictionary *list = [NSMutableDictionary dictionaryWithContentsOfURL:listFile()] ?: [NSMutableDictionary dictionary];
+    if ([list[name] isEqual:key]) return;
+    list[name] = key;
+    [list writeToURL:listFile() error:nil];
+}
+
+NSURL *SGAnimatedCoverFileForAlbum(NSString *artist, NSString *album) {
+    NSString *name = albumName(artist, album);
+    if (!name) return nil;
+    NSURL *own = SGAnimatedCoverFile(SGAnimatedCoverAlbumPicture(artist, album));
+    if (own) return own;
+    NSString *key = [NSDictionary dictionaryWithContentsOfURL:listFile()][name];
+    if (![key isKindOfClass:NSString.class]) return nil;
+    NSURL *file = savedFor(key);
     return [NSFileManager.defaultManager fileExistsAtPath:file.path] ? file : nil;
 }
 
@@ -215,6 +251,7 @@ void SGAnimatedCoverRequest(NSString *picture, NSString *album, NSString *artist
     }
     NSString *key = SGAnimatedCoverKey(picture);
     [png writeToURL:frameFor(key) atomically:YES];
+    SGAnimatedCoverList(picture, artist, album);
     NSMutableDictionary *names = [NSMutableDictionary dictionary];
     if (album.length) names[@"album"] = album;
     if (artist.length) names[@"artist"] = artist;

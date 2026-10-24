@@ -29,6 +29,23 @@ NSString *SGAnimatedCoverPicture(NSString *uri, NSDictionary *metadata);
 NSString *SGAnimatedCoverKey(NSString *picture);
 // The saved loop for the picture, or nil.
 NSURL *SGAnimatedCoverFile(NSString *picture);
+// The picture an album page sends its cover under, which it has no track's picture for: made of the
+// album's artist and name.
+NSString *SGAnimatedCoverAlbumPicture(NSString *artist, NSString *album);
+// The saved loop for an album by its artist and name, whichever way it was made: from a song of it playing
+// or from its page. Each cover sent is listed under its album's artist and name, and a saved one found for a
+// song is listed as the song plays, so an album page finds one made before the list was kept.
+NSURL *SGAnimatedCoverFileForAlbum(NSString *artist, NSString *album);
+void SGAnimatedCoverList(NSString *picture, NSString *artist, NSString *album);
+// The playing album's cover sent, as the lock screen's row and the player's menu send it; what went wrong
+// in an alert. Defined in AnimatedArtworkSettings.m.
+void SGAnimatedCoverSendPlaying(void);
+// The ⋯ menus' items for an album's animated cover, the player's (the playing album) and an album page's:
+// in an Animated Cover submenu, Animate Album Cover, or Animate Again and Delete once saved, or Stop while
+// the computer has it, then the Text and Camera Sway settings, which go with the next cover sent. `send`
+// sends the cover. The computer's address is asked for first when none is entered.
+@class UIMenuElement;
+NSArray<UIMenuElement *> *SGAnimatedCoverMenu(NSString *picture, void (^send)(void));
 // Sends `png`, the cover, to the computer and follows it until its loop is saved. `done` gets nil
 // once the computer has it, else what went wrong.
 void SGAnimatedCoverRequest(NSString *picture, NSString *album, NSString *artist, NSData *png, void (^done)(NSString *error));

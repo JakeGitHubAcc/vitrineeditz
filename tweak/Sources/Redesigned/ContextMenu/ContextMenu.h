@@ -49,3 +49,8 @@ void SGRSystemMenuWatch(UIView *button, SGRMenuItems items, SGRMenuKind kind);
 
 // The mod's button over `button`, which takes the ⋯'s touches once SGRSystemMenuWatch has been called; nil before.
 UIControl *SGRSystemMenuFront(UIView *button);
+
+// Items of a feature's own for an entity page's ⋯, above Spotify's rows: `items` is asked, with the ⋯, each
+// time a page's menu opens, and gives none for a page that is not its own (Album/AlbumHeader.x).
+typedef NSArray<UIMenuElement *> *(^SGRPageMenuItems)(UIView *more);
+void SGRSystemMenuAddPageItems(SGRPageMenuItems items);
