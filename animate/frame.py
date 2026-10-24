@@ -35,14 +35,19 @@ def to_srgb(c):
     return (255 * np.where(c <= 0.0031308, c * 12.92, 1.055 * c ** (1 / 2.4) - 0.055)).astype(np.float32)
 
 
+def shown(cover):
+    """The cover as the frame shows it: trimmed and at OUT_W square."""
+    w, h = cover.size
+    trim = (round(w * EDGE_TRIM), round(h * EDGE_TRIM), w - round(w * EDGE_TRIM), h - round(h * EDGE_TRIM))
+    return cover.convert("RGB").crop(trim).resize((OUT_W, OUT_W), Image.LANCZOS)
+
+
 class Extended:
-    """The frame around `cover`. `lama` is big-lama.pt's path; without it the edges are drawn out instead
-    of painted on."""
+    """The frame around `cover`, as shown() makes it. `lama` is big-lama.pt's path; without it the edges
+    are drawn out instead of painted on."""
 
     def __init__(self, cover, lama=None):
-        w, h = cover.size
-        trim = (round(w * EDGE_TRIM), round(h * EDGE_TRIM), w - round(w * EDGE_TRIM), h - round(h * EDGE_TRIM))
-        self.cover = cover.convert("RGB").crop(trim).resize((OUT_W, OUT_W), Image.LANCZOS)
+        self.cover = cover
         side = OUT_W
         self.top = top = (OUT_H - side) // 2
         sharp = np.asarray(self.cover, dtype=np.float32)

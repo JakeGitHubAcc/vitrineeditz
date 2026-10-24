@@ -138,15 +138,6 @@ static void withCover(NSString *title, void (^then)(CGImageRef cover)) {
     });
 }
 
-// The picture the track names, so the songs of an album share a clip; the track itself when it names none.
-static NSString *pictureOf(SPTPlayerTrack *track, NSDictionary *metadata) {
-    for (NSString *field in @[@"image_xlarge_url", @"image_large_url", @"image_url"]) {
-        id value = metadata[field];
-        if ([value isKindOfClass:NSString.class] && [value length]) return value;
-    }
-    return SGURIString(track.URI);
-}
-
 // The cover's clip is 3:4 (SGLyricsClipSize), so it goes only where the system lists that key. Its style
 // is read as the track is looked up, and each style keeps its own file; the extended cover's key names its
 // layout, so a clip kept from an older one is not shown.
@@ -209,7 +200,7 @@ void SGLockMotionAnimatePlaying(void (^done)(NSString *error)) {
             sg_plainShown = NO;
             NSDictionary *metadata = [state.track.metadata isKindOfClass:NSDictionary.class] ? state.track.metadata : nil;
             sg_title = state.track.trackTitle;
-            sg_picture = pictureOf(state.track, metadata);
+            sg_picture = SGAnimatedCoverPicture(uri, metadata);
             sg_album = [metadata[@"album_title"] isKindOfClass:NSString.class] ? metadata[@"album_title"] : nil;
             sg_artist = nil;
             for (NSString *field in @[@"album_artist_name", @"artist_name"]) {
@@ -218,8 +209,6 @@ void SGLockMotionAnimatePlaying(void (^done)(NSString *error)) {
             sg_choice = SGLockScreenArtwork();
             return motionOn(sg_choice);
         } found:^(NSString *uri, NSURL *file) {
-            // An album with no moving artwork of its own plays the loop the user's computer made of its cover.
-            if (!file) file = SGAnimatedCoverFile(sg_picture);
             // Under the lyrics instead, and never as this file's extra too: both would fill the same 3:4 key.
             if (sg_choice == SGLockArtworkMotionLyrics) {
                 if (file) SGLyricsArtworkSetMotion(uri, file);
@@ -247,12 +236,6 @@ void SGLockMotionAnimatePlaying(void (^done)(NSString *error)) {
             });
         }];
         // Posted on main. A loop saved for the playing album shows at once.
-        [NSNotificationCenter.defaultCenter addObserverForName:SGAnimatedCoverSavedNotification object:nil queue:nil
-                                                    usingBlock:^(NSNotification *note) {
-            if (!sg_picture || ![note.object isEqual:SGAnimatedCoverKey(sg_picture)]) return;
-            SGLog(@"lock motion: the playing album's animated cover was saved, the track looked up again");
-            [sg_follower restart];
-        }];
         SGLog(@"lock motion: %@, the lock screen takes %@", motionOn(sg_choice) ? (sg_choice == SGLockArtworkEverySong ? @"on for every song" : @"on") : @"off",
               MPNowPlayingInfoCenter.supportedAnimatedArtworkKeys);
     }

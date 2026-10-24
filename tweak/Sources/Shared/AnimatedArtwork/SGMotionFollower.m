@@ -1,9 +1,12 @@
 // SGMotionFollower (AnimatedArtwork.h): one track's walk of the sources at a time, for the lock screen
-// (LockScreenMotion.x) and the redesign's player (Redesigned/Player/PlayerMotion.x) alike.
+// (LockScreenMotion.x) and the redesign's player (Redesigned/Player/PlayerMotion.x) alike. A track none of
+// the sources has a clip for gets its album's cover animated on the user's computer, where one is saved
+// (SGCoverAnimator.h), and is walked again when one is saved for it.
 #import <objc/runtime.h>
 #import "Core/SGCore.h"
 #import "Shared/Player/PlayerState.h"
 #import "AnimatedArtwork.h"
+#import "SGCoverAnimator.h"
 #import "SGMotionClip.h"
 
 @interface SGMotionFollower () <SGPlayerStateObserver>
@@ -18,6 +21,7 @@
     NSString *_source;   // where the clip found came from, nil for none or not found yet
     NSUInteger _walk;    // counts the walks, so an overtaken one is told from the newest
     NSString *_ahead;    // the next track whose clip was fetched ahead
+    NSString *_picture;  // the picture the track walked last names, whose animated cover stands in
 }
 
 - (instancetype)initWithBegin:(BOOL (^)(NSString *, SPTPlayerState *))begin found:(void (^)(NSString *, NSURL *))found {
@@ -25,7 +29,15 @@
     _begin = [begin copy];
     _found = [found copy];
     SGAddPlayerStateObserver(self);
+    [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(animatedCoverSaved:)
+                                               name:SGAnimatedCoverSavedNotification object:nil];
     return self;
+}
+
+- (void)animatedCoverSaved:(NSNotification *)note {
+    if (!_picture || ![note.object isEqual:SGAnimatedCoverKey(_picture)]) return;
+    SGLog(@"motion: the animated cover of %@ was saved, walked again", _track);
+    [self restart];
 }
 
 - (void)playerStateDidChange:(SPTPlayerState *)state {
@@ -47,11 +59,15 @@
     _walked = _begin(uri, state);
     if (!_walked) return;
     NSDictionary *metadata = [state.track.metadata isKindOfClass:NSDictionary.class] ? state.track.metadata : nil;
+    NSString *picture = SGAnimatedCoverPicture(uri, metadata);
+    _picture = picture;
     __weak SGMotionFollower *weakSelf = self;
     SGMotionClipFor(uri, canvas, state.track.artistName, metadata[@"album_title"], SGMotionTall, SGMotionPixels(), ^(NSURL *file, NSString *source) {
         SGMotionFollower *follower = weakSelf;
         if (!follower || walk != follower->_walk) return;
         follower->_source = source;
+        // The source stays none, so a Canvas that comes late still takes over from the animated cover.
+        if (!file) file = SGAnimatedCoverFile(picture);
         follower->_found(uri, file);
         [follower fetchAhead];
     });

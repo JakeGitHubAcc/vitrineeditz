@@ -87,8 +87,8 @@ NSArray *SGLockScreenMotionRows(void) {
         star.visible = ^BOOL { return SGLockScreenArtwork() != SGLockArtworkOff; };
         SGModRow *animate = SGStatActionRow(@"Animate this album's cover",
                                             @"Your computer makes a moving version of the playing album's cover with Vitrine Animate. "
-                                            @"It is saved on this iPhone and plays for every song of the album that has no Canvas "
-                                            @"or animated cover, with the computer off",
+                                            @"It is saved on this iPhone and plays, on the lock screen and behind the player, for "
+                                            @"every song of the album that has no Canvas or animated cover, with the computer off",
                                             ^NSString *{ return SGAnimatedCoverStatus(SGLockMotionPlayingPicture()) ?: @"Not animated"; },
                                             ^{ animateTapped(); });
         animate.visible = lowData.visible;
@@ -96,6 +96,15 @@ NSArray *SGLockScreenMotionRows(void) {
                                              ^NSString *{ return SGAnimatedCoverServer() ?: @"Not set"; },
                                              ^{ SGAnimatedCoverAskServer(nil); });
         computer.visible = lowData.visible;
+        SGModRow *text = SGChoiceRow(@"Text on animated covers", @"Keep holds the cover's text still. Fade lets it fade out "
+                                                                  @"and back in over each loop, as some animated covers do. "
+                                                                  @"Hide paints it out. For covers animated from now on; "
+                                                                  @"Animate Again remakes one",
+                                     SGKeyAnimateText, @[@"Keep", @"Fade", @"Hide"], SGAnimateTextKeep);
+        text.visible = lowData.visible;
+        SGModRow *sway = SGOptionRow(@"Camera sway", @"A slow, slight drift and push of the whole picture. For covers animated "
+                                                     @"from now on", SGKeyAnimateSway);
+        sway.visible = lowData.visible;
         SGModRow *kept = SGStatRow(@"Animated covers saved", ^NSString *{ return [NSString stringWithFormat:@"%lu", (unsigned long)SGAnimatedCoverCount()]; });
         kept.visible = lowData.visible;
         return @[
@@ -109,6 +118,8 @@ NSArray *SGLockScreenMotionRows(void) {
             star,
             sources,
             animate,
+            text,
+            sway,
             computer,
             kept,
             lowData,

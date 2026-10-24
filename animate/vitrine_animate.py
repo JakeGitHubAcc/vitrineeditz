@@ -8,12 +8,14 @@ and artist; this server queues it and makes its loop:
 2. what moves: Wan 2.2 TI2V-5B in ComfyUI (workflow.json) animates the cover, and the optical flow of its
    frames, softened, with text and faces held, moves the cover's own pixels (motion.py), so its colors,
    detail and faces stay its own; the end turns back along the motion to the first frame;
-3. the lock screen's 3:4 frame around it (frame.py) and a light film grain;
+3. the lock screen's 3:4 frame around it (frame.py), what the phone's Text and Camera sway settings ask
+   for (effects.py), and a light film grain;
 
 and keeps the MP4 in the clips folder, where the phone downloads it. One job runs at a time. Run it with
 ComfyUI's own Python (start.bat), which has everything it imports.
 
-    POST /animate?key=K&album=A&artist=R   body: PNG -> {"state": "queued"|"running"|"done", "position": n}
+    POST /animate?key=K&album=A&artist=R&text=keep|fade|hide&sway=0|1
+                                       body: PNG -> {"state": "queued"|"running"|"done", "position": n}
                                                         (a cover sent again is animated again)
     GET  /status?key=K                    -> {"state": ..., "progress": 0..1, "position": n, "error": ...}
     GET  /clip?key=K                      -> the MP4
@@ -44,9 +46,10 @@ from PIL import Image
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import catalog  # noqa: E402
+import effects  # noqa: E402
 import label  # noqa: E402
 import motion  # noqa: E402
-from frame import OUT_H, OUT_W, Extended  # noqa: E402
+from frame import OUT_H, OUT_W, Extended, shown as shown_cover  # noqa: E402
 
 KEY = re.compile(r"^[0-9a-f]{16,64}$")
 
@@ -278,22 +281,38 @@ def work(jobs, comfy, lama, faces, keep_labels):
         frames = []
         try:
             cover, lines = clean_cover(cover_of(png), names, lama, keep_labels)
-            extended = Extended(cover, lama)
-            shown = extended.cover
+            shown = shown_cover(cover)
             # Text and faces as boxes in shares of the cover's side; the trim it is shown with is a hair's.
             text = [tuple(v / cover.width for v in box) for _, score, box in lines if score > 0.5]
             people = [tuple(v / shown.width for v in box) for box in motion.faces(np.asarray(shown), faces)]
-            say(f"holding {len(text)} lines of text and {len(people)} faces still")
-            shown.resize((SIDE, SIDE), Image.LANCZOS).save(os.path.join(inputs, image_name))
+            wording = names.get("text", "keep") if text and lama else "keep"
+            sway = names.get("sway") == "1"
+            say(f"{len(text)} lines of text ({wording}), {len(people)} faces, {'a' if sway else 'no'} camera sway")
+            # Hidden text is painted out of what moves; faded text is painted out under the text laid over it.
+            erased, where = effects.plate(shown, text, lama) if wording != "keep" else (None, None)
+            moving = erased if wording == "hide" else shown
+            extended = Extended(erased if erased is not None else shown, lama)
+            moving.resize((SIDE, SIDE), Image.LANCZOS).save(os.path.join(inputs, image_name))
             seed = int(key[:12], 16) % (2 ** 31) + random.randint(0, 999)
             frames = comfy.run(image_name, seed)
             pictures = [np.asarray(Image.open(f).convert("RGB"), dtype=np.float32) for f in frames]
             # The model's first frame is a little off from the rest (Wan's VAE makes it alone): measured from
             # the second.
-            covers = motion.animate(shown, pictures[1:], text, people)
-            clip = [extended.frame(c) for c in covers]
+            steps = motion.loop(pictures[1:], [] if wording == "hide" else text, people)
+            if wording == "fade" or sway:
+                steps = effects.lengthened(steps)
+            base = np.asarray(erased if wording == "fade" else moving, dtype=np.float32)
+            still = np.asarray(shown, dtype=np.float32)
+            n = len(steps)
+            clip = []
+            for i, step in enumerate(steps):
+                cover_frame = motion.warped(base, step)
+                if wording == "fade":
+                    cover_frame = effects.faded(cover_frame, still, where, effects.shown_text(i, n))
+                frame = extended.frame(cover_frame)
+                clip.append(effects.swayed(frame, i, n) if sway else frame)
             # The last frame is the first; its grain is too, so the two are the same frame.
-            seeds = list(range(len(clip)))
+            seeds = list(range(n))
             seeds[-1] = seeds[0]
             encode([np.clip(np.round(motion.grained(f, s)), 0, 255).astype(np.uint8) for f, s in zip(clip, seeds)], jobs.clip(key))
             seconds = time.time() - started
@@ -365,7 +384,7 @@ def handler(jobs):
                 return self.answer(400, {"error": "bad image"})
             png = self.rfile.read(length)
             query = parse_qs(urlparse(self.path).query)
-            names = {name: query[name][0].strip()[:200] for name in ("album", "artist") if query.get(name)}
+            names = {name: query[name][0].strip()[:200] for name in ("album", "artist", "text", "sway") if query.get(name)}
             say(f"{key} received from {self.client_address[0]}")
             self.answer(200, jobs.add(key, png, names))
 
