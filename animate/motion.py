@@ -152,7 +152,7 @@ def grained(frame, seed):
     return frame + (GRAIN * noise * (0.35 + 2.6 * luma * (1 - luma)))[..., None]
 
 
-def animate(cover, frames, text_boxes, face_boxes):
-    """The clip's covers: `cover` (PIL, the size it is shown at) moved as the model's `frames` move, looped."""
-    sharp = np.asarray(cover.convert("RGB"), dtype=np.float32)
-    return [warped(sharp, f) for f in looped(shaped(flows(frames), text_boxes, face_boxes))]
+def loop(frames, text_boxes, face_boxes):
+    """The looped flow of the model's `frames`, shaped, one per frame of the clip: warped() moves the cover
+    by each."""
+    return looped(shaped(flows(frames), text_boxes, face_boxes))

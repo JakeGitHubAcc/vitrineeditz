@@ -28,8 +28,17 @@ static NSURL *folder(NSString *sub) {
 
 static NSURL *savedFor(NSString *key) { return [folder(nil) URLByAppendingPathComponent:[key stringByAppendingPathExtension:@"mp4"]]; }
 static NSURL *frameFor(NSString *key) { return [folder(@"sent") URLByAppendingPathComponent:[key stringByAppendingPathExtension:@"png"]]; }
-// The album's name and artist sent with the cover, kept beside it as a plist so a cover sent again has them.
+// The album's name and artist, and the text and sway settings, sent with the cover, kept beside it as a
+// plist so a cover sent again has them.
 static NSURL *namesFor(NSString *key) { return [folder(@"sent") URLByAppendingPathComponent:[key stringByAppendingPathExtension:@"plist"]]; }
+
+NSString *SGAnimatedCoverPicture(NSString *uri, NSDictionary *metadata) {
+    for (NSString *field in @[@"image_xlarge_url", @"image_large_url", @"image_url"]) {
+        id value = [metadata isKindOfClass:NSDictionary.class] ? metadata[field] : nil;
+        if ([value isKindOfClass:NSString.class] && [value length]) return value;
+    }
+    return uri;
+}
 
 NSString *SGAnimatedCoverKey(NSString *picture) {
     NSData *data = [picture dataUsingEncoding:NSUTF8StringEncoding];
@@ -68,7 +77,7 @@ static NSURL *endpoint(NSString *path, NSString *key, NSDictionary<NSString *, N
     NSString *base = [server containsString:@"://"] ? server : [@"http://" stringByAppendingString:server];
     NSURLComponents *url = [NSURLComponents componentsWithString:[NSString stringWithFormat:@"%@/%@", base, path]];
     NSMutableArray *query = [NSMutableArray arrayWithObject:[NSURLQueryItem queryItemWithName:@"key" value:key]];
-    for (NSString *name in @[@"album", @"artist"]) {
+    for (NSString *name in @[@"album", @"artist", @"text", @"sway"]) {
         if ([names[name] isKindOfClass:NSString.class] && names[name].length) [query addObject:[NSURLQueryItem queryItemWithName:name value:names[name]]];
     }
     url.queryItems = query;
@@ -209,6 +218,8 @@ void SGAnimatedCoverRequest(NSString *picture, NSString *album, NSString *artist
     NSMutableDictionary *names = [NSMutableDictionary dictionary];
     if (album.length) names[@"album"] = album;
     if (artist.length) names[@"artist"] = artist;
+    names[@"text"] = @[@"keep", @"fade", @"hide"][(NSUInteger)MIN(MAX(SGInt(SGKeyAnimateText, SGAnimateTextKeep), 0), 2)];
+    names[@"sway"] = SGHidden(SGKeyAnimateSway) ? @"1" : @"0";   // an option row: off until switched on
     [names writeToURL:namesFor(key) error:nil];
     setPending(key, album ?: @"");
     send(key, png, ^(NSString *error) {

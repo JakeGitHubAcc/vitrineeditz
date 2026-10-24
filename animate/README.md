@@ -10,10 +10,16 @@ name and artist, and this:
   are moved along the clip's optical flow (`motion.py`), so its colors and detail stay its own. The
   camera's part of the motion is taken out and the rest softened and capped; text does not move and
   faces move only as a whole. The end turns back along the motion, so the clip ends on its first frame;
-- paints the cover on a little above and below it and fades that into a smooth blur (`frame.py`),
-  adds a light film grain, and hands the MP4 back.
+- paints the cover on a little above and below it and fades that into a smooth blur (`frame.py`);
+- does what the phone's **Text on animated covers** and **Camera sway** settings ask (`effects.py`): the
+  text kept still, faded out and back in over the loop, or painted out, and a slow, slight sway of the
+  whole picture. Either makes the loop about 8 seconds, the motion played over itself;
+- adds a light film grain, and hands the MP4 back.
 
-The phone keeps it for good, so it plays with the computer off. Finished clips are also kept in `clips/`.
+The phone keeps it for good, so it plays with the computer off, on the lock screen and behind the player
+(with the player's background on Animated) for every song of the album without a Canvas or animated
+cover. Finished clips are also kept in `clips/`. The two settings apply to covers sent after they are
+changed; **Animate Again** remakes one.
 
 ## Setup (Windows, NVIDIA, 8 GB VRAM or more)
 
