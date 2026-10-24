@@ -6,10 +6,11 @@
 #import <CoreImage/CoreImage.h>
 #import "SGExtendedClip.h"
 
-// The cover's center's height from the top, as a share of the clip's: where the Music app puts a still
-// cover on the lock screen, under the clock.
-// ponytail: measured from one screenshot of the Music app; tune on a device.
-static const CGFloat kCoverY = 0.41;
+// The cover's center's height from the top, as a share of the clip's. The lock screen shows a 3:4 clip at
+// the screen's full width, its top about a tenth of the way down, so a cover across the clip's width
+// centered in it sits where the Music app puts a still cover, under the clock.
+// ponytail: measured from screenshots of the Music app and of this clip on one iPhone; tune on others.
+static const CGFloat kCoverY = 0.5;
 // A share of the cover's side cut off each edge before it is drawn out: many covers have a thin border or
 // a JPEG fringe there, which would be drawn out as a stripe.
 static const CGFloat kEdgeTrim = 0.006;
@@ -35,8 +36,8 @@ static CGContextRef newContext(CGSize size, void *data, size_t bytesPerRow) {
 
 // The cover's square in the clip, in Core Image's and Core Graphics' coordinates, which count up from the
 // bottom.
-static CGRect coverRect(CGSize size, CGFloat visible) {
-    CGFloat side = round(size.width * MIN(MAX(visible, 0.3), 1));
+static CGRect coverRect(CGSize size) {
+    CGFloat side = size.width;
     CGFloat top = round(size.height * kCoverY - side / 2);
     return CGRectMake(round((size.width - side) / 2), size.height - top - side, side, side);
 }
@@ -99,8 +100,8 @@ static CGImageRef newFeather(CGFloat side) CF_RETURNS_RETAINED {
 }
 
 // The frame into `context`, which is `size`. NO when the streaks could not be made.
-static BOOL drawFrame(CGContextRef context, CGImageRef cover, CGSize size, CGFloat visible) {
-    CGRect rect = coverRect(size, visible);
+static BOOL drawFrame(CGContextRef context, CGImageRef cover, CGSize size) {
+    CGRect rect = coverRect(size);
     CGImageRef streaks = newStreaks(cover, size, rect);
     if (!streaks) return NO;
     CGContextSetInterpolationQuality(context, kCGInterpolationHigh);
@@ -125,16 +126,16 @@ static BOOL drawFrame(CGContextRef context, CGImageRef cover, CGSize size, CGFlo
     return YES;
 }
 
-CGImageRef SGExtendedClipFrame(CGImageRef cover, CGSize size, CGFloat visible) {
+CGImageRef SGExtendedClipFrame(CGImageRef cover, CGSize size) {
     if (!cover) return NULL;
     CGContextRef context = newContext(size, NULL, 0);
-    CGImageRef frame = drawFrame(context, cover, size, visible) ? CGBitmapContextCreateImage(context) : NULL;
+    CGImageRef frame = drawFrame(context, cover, size) ? CGBitmapContextCreateImage(context) : NULL;
     CGContextRelease(context);
     return frame;
 }
 
 // The frame is drawn once into one buffer, which every frame of the clip repeats.
-BOOL SGExtendedClipWrite(NSURL *file, CGImageRef cover, CGSize size, CGFloat visible) {
+BOOL SGExtendedClipWrite(NSURL *file, CGImageRef cover, CGSize size) {
     if (!cover) return NO;
     // Written beside the file and moved over it once whole, so a clip cut off halfway is never found.
     NSURL *partial = [file URLByAppendingPathExtension:@"partial"];
@@ -162,7 +163,7 @@ BOOL SGExtendedClipWrite(NSURL *file, CGImageRef cover, CGSize size, CGFloat vis
     if (ok) {
         CVPixelBufferLockBaseAddress(buffer, 0);
         CGContextRef context = newContext(size, CVPixelBufferGetBaseAddress(buffer), CVPixelBufferGetBytesPerRow(buffer));
-        ok = drawFrame(context, cover, size, visible);
+        ok = drawFrame(context, cover, size);
         CGContextRelease(context);
         CVPixelBufferUnlockBaseAddress(buffer, 0);
     }
