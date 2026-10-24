@@ -35,21 +35,30 @@ from PIL import Image
 HERE = os.path.dirname(os.path.abspath(__file__))
 KEY = re.compile(r"^[0-9a-f]{16,64}$")
 
-# The clip: Wan 2.2 TI2V-5B works in multiples of 32 and 4n+1 frames at 24 fps. 576x768 is 3:4, the lock
-# screen's shape, and small enough for an 8 GB card; 73 frames is three seconds before the loop's fade.
-WIDTH, HEIGHT, FRAMES, FPS = 576, 768, 73, 24
+# The phone sends its 3:4 extended cover: the square cover across the frame's width, centered, its edges
+# drawn out above and below. Only the square is animated: given the drawn-out edges, which have no detail,
+# the model invents blotches there that flicker, so they stay as the phone drew them and the moving square
+# is laid back over them, its top and bottom feathered into the still frame.
+# Wan 2.2 TI2V-5B works in multiples of 32 and 4n+1 frames at 24 fps; a 640 square fits an 8 GB card, and
+# 73 frames is three seconds before the loop's fade.
+SIDE, FRAMES, FPS = 640, 73, 24
+WIDTH, HEIGHT = SIDE, SIDE
+# The clip the phone gets: 3:4 at three quarters of an iPhone's width, the size SGMotionPixels downloads.
+OUT_W, OUT_H = 768, 1024
+# Rows at the square's top and bottom that fade from the animation into the still frame.
+FEATHER = 24
 # Frames at the end blended into the start, so the loop has no seam: half a second.
 FADE = 12
 
 POSITIVE = (
-    "A living photograph of this album cover, a subtle cinemagraph. The camera is locked off and completely "
-    "still: no zoom, no pan, no tilt, no camera shake. Only gentle, slow, natural motion where it belongs: "
-    "people breathe softly and sway a little, hair and clothes stir in a light breeze, leaves and branches "
-    "sway, grass ripples, clouds drift slowly, water ripples, rain and snow fall, smoke curls, lights glow and "
-    "flicker softly. Text, logos and lettering stay perfectly still, sharp and unchanged. Everything keeps its "
-    "exact shape, colors and composition."
+    "Gentle, natural movement brings this still picture to life as a cinemagraph. A soft breeze sways the "
+    "trees, branches, leaves and grass. People breathe slowly and shift their weight a little; their hair and "
+    "clothes stir. Clouds drift, water ripples, rain and snow fall, smoke curls, lights shimmer. Fixed static "
+    "camera: no zoom, no pan, no tilt. Text, logos and lettering stay sharp and unchanged, and everything "
+    "keeps its shape, colors and composition."
 )
 NEGATIVE = (
+    "frozen, static image, no motion, still frame, "
     "camera movement, zoom, pan, dolly, shaking, fast motion, sudden motion, morphing, warping, melting, "
     "distortion, changing text, moving letters, new objects appearing, objects disappearing, scene change, "
     "cut, transition, flicker, strobing, blur, low quality, jpeg artifacts, deformed face, extra limbs, "
@@ -219,6 +228,32 @@ def looped(frames):
     return body + tail
 
 
+def still_and_square(png):
+    """The phone's frame at OUT_W x OUT_H, and its cover square at SIDE for the model."""
+    frame = Image.open(io.BytesIO(png)).convert("RGB").resize((OUT_W, OUT_H), Image.LANCZOS)
+    top = (OUT_H - OUT_W) // 2
+    square = frame.crop((0, top, OUT_W, top + OUT_W)).resize((SIDE, SIDE), Image.LANCZOS)
+    return np.asarray(frame, dtype=np.float32), square
+
+
+def composed(still, animated):
+    """Each animated square, scaled to the frame's width, laid over the still frame at the cover's place,
+    fading in over FEATHER rows at its top and bottom."""
+    top = (OUT_H - OUT_W) // 2
+    ramp = np.ones(OUT_W, dtype=np.float32)
+    edge = np.linspace(0, 1, FEATHER + 2, dtype=np.float32)[1:-1]
+    ramp[:FEATHER], ramp[-FEATHER:] = edge, edge[::-1]
+    alpha = ramp[:, None, None]
+    region = still[top:top + OUT_W]
+    out = []
+    for square in animated:
+        moving = np.asarray(Image.fromarray(square.astype(np.uint8)).resize((OUT_W, OUT_W), Image.LANCZOS), dtype=np.float32)
+        frame = still.copy()
+        frame[top:top + OUT_W] = region * (1 - alpha) + moving * alpha
+        out.append(frame)
+    return out
+
+
 def encode(frames, path):
     partial = path + ".partial"
     with av.open(partial, mode="w", format="mp4") as container:
@@ -243,12 +278,13 @@ def work(jobs, comfy):
         image_name = f"vitrine_{key}.png"
         frames = []
         try:
-            cover = Image.open(io.BytesIO(png)).convert("RGB").resize((WIDTH, HEIGHT), Image.LANCZOS)
-            cover.save(os.path.join(inputs, image_name))
+            still, square = still_and_square(png)
+            square.save(os.path.join(inputs, image_name))
             seed = int(key[:12], 16) % (2 ** 31) + random.randint(0, 999)
             frames = comfy.run(image_name, seed)
             pictures = [np.asarray(Image.open(f).convert("RGB"), dtype=np.float32) for f in frames]
-            encode([np.clip(f, 0, 255).astype(np.uint8) for f in looped(pictures)], jobs.clip(key))
+            clip = composed(still, looped(pictures))
+            encode([np.clip(f, 0, 255).astype(np.uint8) for f in clip], jobs.clip(key))
             seconds = time.time() - started
             jobs.finish(key, seconds=seconds)
             print(f"[{time.strftime('%H:%M:%S')}] saved {key}.mp4 in {seconds / 60:.1f} min")
@@ -293,7 +329,7 @@ def handler(jobs):
                 return self.answer(403, {"error": "home network only"})
             path = urlparse(self.path).path
             if path == "/health":
-                return self.answer(200, {"ok": True, "name": "Vitrine Animate", "size": [WIDTH, HEIGHT]})
+                return self.answer(200, {"ok": True, "name": "Vitrine Animate", "size": [OUT_W, OUT_H]})
             key = self.key()
             if not key:
                 return self.answer(400, {"error": "bad key"})
@@ -340,6 +376,7 @@ def main():
     parser.add_argument("--comfy", required=True, help="the ComfyUI_windows_portable folder")
     parser.add_argument("--clips", required=True, help="where finished clips are kept")
     parser.add_argument("--port", type=int, default=8790)
+    parser.add_argument("--host", default="0.0.0.0", help="127.0.0.1 keeps it to this computer, for a test")
     parser.add_argument("--comfy-port", type=int, default=8188)
     args = parser.parse_args()
     os.makedirs(args.clips, exist_ok=True)
@@ -347,7 +384,7 @@ def main():
     comfy = Comfy(args.comfy, args.comfy_port)
     comfy.start()
     threading.Thread(target=work, args=(jobs, comfy), daemon=True).start()
-    server = ThreadingHTTPServer(("0.0.0.0", args.port), handler(jobs))
+    server = ThreadingHTTPServer((args.host, args.port), handler(jobs))
     print()
     print(f"Vitrine Animate is running. In Vitrine's lock screen settings, set Computer to:  {lan_address()}:{args.port}")
     print(f"Clips are kept in {args.clips}. Leave this window open while covers animate.")
