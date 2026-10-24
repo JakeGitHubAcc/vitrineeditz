@@ -31,6 +31,7 @@ static const CGFloat kSameShape = 0.02;
 static NSString *sg_title;
 static NSString *sg_picture;   // the picture the track names, for the cover's clip
 static NSString *sg_album;     // the album's name, for the animate row
+static NSString *sg_artist;    // the album's artist, so the computer can look up a clean copy of its cover
 static NSUInteger sg_walk;   // counts the tracks walked, so a poster that comes late is told from the newest
 static SGLockArtwork sg_choice;
 static NSInteger sg_coverStyle;   // the SGLockCoverStyle last read, so a change of it alone looks the track up again
@@ -181,17 +182,17 @@ static void showCover(NSString *picture) {
 NSString *SGLockMotionPlayingPicture(void) { return sg_picture; }
 NSString *SGLockMotionPlayingAlbum(void) { return sg_album.length ? sg_album : sg_title; }
 
-// The playing album's cover, sent as PNG. The computer takes any Parental Advisory label off it and draws
-// its extended edges as SGExtendedClip.m does, from the cleaned cover, so the label is not drawn out too.
+// The playing album's cover, sent as PNG with the album's name and artist. The computer looks up a copy of
+// the cover without a Parental Advisory label by them, or takes the label off this one.
 void SGLockMotionAnimatePlaying(void (^done)(NSString *error)) {
-    NSString *picture = sg_picture, *album = SGLockMotionPlayingAlbum(), *title = sg_title;
+    NSString *picture = sg_picture, *album = SGLockMotionPlayingAlbum(), *artist = sg_artist, *title = sg_title;
     if (!picture || !sg_queue) {
         done(@"Play a song from the album first.");
         return;
     }
     withCover(title, ^(CGImageRef cover) {
         NSData *png = cover ? UIImagePNGRepresentation([UIImage imageWithCGImage:cover]) : nil;
-        dispatch_async(dispatch_get_main_queue(), ^{ SGAnimatedCoverRequest(picture, album, png, done); });
+        dispatch_async(dispatch_get_main_queue(), ^{ SGAnimatedCoverRequest(picture, album, artist, png, done); });
     });
 }
 
@@ -210,6 +211,10 @@ void SGLockMotionAnimatePlaying(void (^done)(NSString *error)) {
             sg_title = state.track.trackTitle;
             sg_picture = pictureOf(state.track, metadata);
             sg_album = [metadata[@"album_title"] isKindOfClass:NSString.class] ? metadata[@"album_title"] : nil;
+            sg_artist = nil;
+            for (NSString *field in @[@"album_artist_name", @"artist_name"]) {
+                if (!sg_artist.length && [metadata[field] isKindOfClass:NSString.class]) sg_artist = metadata[field];
+            }
             sg_choice = SGLockScreenArtwork();
             return motionOn(sg_choice);
         } found:^(NSString *uri, NSURL *file) {

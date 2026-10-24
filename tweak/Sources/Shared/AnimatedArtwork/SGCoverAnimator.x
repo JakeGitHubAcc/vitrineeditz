@@ -1,5 +1,5 @@
-// SGCoverAnimator.h says what this is. Vitrine Animate answers four requests: POST /animate?key= with
-// the cover as PNG, GET /status?key= ({"state": queued, running, done, failed or unknown, "progress",
+// SGCoverAnimator.h says what this is. Vitrine Animate answers four requests: POST /animate?key=&album=
+// &artist= with the cover as PNG, GET /status?key= ({"state": queued, running, done, failed or unknown, "progress",
 // "position", "error"}), GET /clip?key= for the MP4, and GET /health. A sent cover is asked about every
 // few seconds while Spotify runs, which it keeps doing in the background while music plays; the cover is
 // kept until its loop is saved, so a computer restarted halfway is sent it again.
@@ -28,6 +28,8 @@ static NSURL *folder(NSString *sub) {
 
 static NSURL *savedFor(NSString *key) { return [folder(nil) URLByAppendingPathComponent:[key stringByAppendingPathExtension:@"mp4"]]; }
 static NSURL *frameFor(NSString *key) { return [folder(@"sent") URLByAppendingPathComponent:[key stringByAppendingPathExtension:@"png"]]; }
+// The album's name and artist sent with the cover, kept beside it as a plist so a cover sent again has them.
+static NSURL *namesFor(NSString *key) { return [folder(@"sent") URLByAppendingPathComponent:[key stringByAppendingPathExtension:@"plist"]]; }
 
 NSString *SGAnimatedCoverKey(NSString *picture) {
     NSData *data = [picture dataUsingEncoding:NSUTF8StringEncoding];
@@ -60,11 +62,17 @@ static void setPending(NSString *key, NSString *album) {
     [NSUserDefaults.standardUserDefaults setObject:all forKey:SGKeyAnimatePending];
 }
 
-static NSURL *endpoint(NSString *path, NSString *key) {
+static NSURL *endpoint(NSString *path, NSString *key, NSDictionary<NSString *, NSString *> *names) {
     NSString *server = SGAnimatedCoverServer();
     if (!server) return nil;
     NSString *base = [server containsString:@"://"] ? server : [@"http://" stringByAppendingString:server];
-    return [NSURL URLWithString:[NSString stringWithFormat:@"%@/%@?key=%@", base, path, key]];
+    NSURLComponents *url = [NSURLComponents componentsWithString:[NSString stringWithFormat:@"%@/%@", base, path]];
+    NSMutableArray *query = [NSMutableArray arrayWithObject:[NSURLQueryItem queryItemWithName:@"key" value:key]];
+    for (NSString *name in @[@"album", @"artist"]) {
+        if ([names[name] isKindOfClass:NSString.class] && names[name].length) [query addObject:[NSURLQueryItem queryItemWithName:name value:names[name]]];
+    }
+    url.queryItems = query;
+    return url.URL;
 }
 
 static void poll(void);
@@ -81,6 +89,7 @@ static void unfollow(NSString *key) {
     [all removeObjectForKey:key];
     [NSUserDefaults.standardUserDefaults setObject:all forKey:SGKeyAnimatePending];
     [NSFileManager.defaultManager removeItemAtURL:frameFor(key) error:nil];
+    [NSFileManager.defaultManager removeItemAtURL:namesFor(key) error:nil];
     if (!all.count) {
         [sg_timer invalidate];
         sg_timer = nil;
@@ -95,7 +104,7 @@ static NSDictionary *answerIn(NSData *data, NSURLResponse *response, NSError *er
 }
 
 static void send(NSString *key, NSData *png, void (^done)(NSString *error)) {
-    NSURL *url = endpoint(@"animate", key);
+    NSURL *url = endpoint(@"animate", key, [NSDictionary dictionaryWithContentsOfURL:namesFor(key)]);
     if (!url) {
         if (done) done(@"No computer address is entered.");
         return;
@@ -126,7 +135,7 @@ static void send(NSString *key, NSData *png, void (^done)(NSString *error)) {
 
 // Moves the finished loop into the kept folder, which the downloads' trimming never touches.
 static void fetch(NSString *key) {
-    NSURL *url = endpoint(@"clip", key);
+    NSURL *url = endpoint(@"clip", key, nil);
     if (!url || [sg_asking containsObject:key]) return;
     [sg_asking addObject:key];
     sg_status[key] = @"Downloading…";
@@ -152,7 +161,7 @@ static void fetch(NSString *key) {
 }
 
 static void ask(NSString *key) {
-    NSURL *url = endpoint(@"status", key);
+    NSURL *url = endpoint(@"status", key, nil);
     if (!url || [sg_asking containsObject:key]) return;
     [sg_asking addObject:key];
     NSURLRequest *request = [NSURLRequest requestWithURL:url cachePolicy:NSURLRequestReloadIgnoringLocalCacheData timeoutInterval:10];
@@ -190,13 +199,17 @@ static void poll(void) {
     for (NSString *key in pending()) ask(key);
 }
 
-void SGAnimatedCoverRequest(NSString *picture, NSString *album, NSData *png, void (^done)(NSString *error)) {
+void SGAnimatedCoverRequest(NSString *picture, NSString *album, NSString *artist, NSData *png, void (^done)(NSString *error)) {
     if (!picture.length || !png.length) {
         if (done) done(@"The album's cover is not loaded yet. Try again in a moment.");
         return;
     }
     NSString *key = SGAnimatedCoverKey(picture);
     [png writeToURL:frameFor(key) atomically:YES];
+    NSMutableDictionary *names = [NSMutableDictionary dictionary];
+    if (album.length) names[@"album"] = album;
+    if (artist.length) names[@"artist"] = artist;
+    [names writeToURL:namesFor(key) error:nil];
     setPending(key, album ?: @"");
     send(key, png, ^(NSString *error) {
         if (!error) follow();

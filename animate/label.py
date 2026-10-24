@@ -21,6 +21,8 @@ SNAP, INWARD, EDGE = 0.2, 0.08, 2.0
 MARGIN = 0.006
 # The cover around the label that LaMa sees, as a multiple of the label's longer side.
 CONTEXT = 1.25
+# The size a cover is read at, in pixels.
+READ_SIDE = 1280
 
 _ocr = None
 _lama = {}
@@ -101,19 +103,29 @@ def snapped(gray, box):
     return l, t, r, b
 
 
-def find(cover):
-    """The label's box (left, top, right, bottom) in `cover`'s pixels, or None."""
+def read(cover):
+    """The text on `cover`: (text, score, (left, top, right, bottom)) in its pixels, for each line read."""
+    # Read at READ_SIDE whatever the cover's size: a label is often a tenth of the cover, its smallest line
+    # a few pixels tall, and the reader shrinks much larger pictures until it misses even big titles.
+    scale = READ_SIDE / max(cover.width, cover.height)
+    big = np.asarray(cover.convert("RGB").resize((round(cover.width * scale), round(cover.height * scale)), Image.LANCZOS))
+    found, _ = ocr()(big[:, :, ::-1])
+    lines = []
+    for points, text, score in found or []:
+        xs, ys = [p[0] / scale for p in points], [p[1] / scale for p in points]
+        lines.append((text, float(score), (min(xs), min(ys), max(xs), max(ys))))
+    return lines
+
+
+def find(cover, lines=None):
+    """The label's box (left, top, right, bottom) in `cover`'s pixels, or None. `lines` is read(cover)'s,
+    when it has been read already."""
     pixels = np.asarray(cover.convert("RGB"))
     gray = pixels.astype(np.float32) @ np.array([0.299, 0.587, 0.114], dtype=np.float32)
-    # Read at twice the size: a label is often a tenth of the cover, its smallest line a few pixels tall.
-    big = np.asarray(cover.convert("RGB").resize((cover.width * 2, cover.height * 2), Image.LANCZOS))
-    found, _ = ocr()(big[:, :, ::-1])
     hits = {}
-    for points, text, score in found or []:
+    for text, score, box in read(cover) if lines is None else lines:
         word = label_word(text)
-        if word in ("PARENTAL", "ADVISORY") and float(score) > 0.5:
-            xs, ys = [p[0] / 2 for p in points], [p[1] / 2 for p in points]
-            box = (min(xs), min(ys), max(xs), max(ys))
+        if word in ("PARENTAL", "ADVISORY") and score > 0.5:
             if word not in hits or box[2] - box[0] > hits[word][2] - hits[word][0]:
                 hits[word] = box
     if not hits:
@@ -132,9 +144,20 @@ def find(cover):
     return max(0, l - margin), max(0, t - margin), min(w, r + margin), min(h, b + margin)
 
 
+def inpaint(image, hole, model):
+    """LaMa's fill of `hole` (1 where it fills) in `image` (RGB, 0 to 1), the whole image back."""
+    import torch
+    # LaMa takes sides in multiples of 8; the image is padded by reflection and the padding cut off after.
+    ph, pw = (-image.shape[0]) % 8, (-image.shape[1]) % 8
+    padded = np.pad(image, ((0, ph), (0, pw), (0, 0)), mode="reflect").astype(np.float32)
+    mask = np.pad(hole, ((0, ph), (0, pw)), mode="reflect").astype(np.float32)
+    with torch.inference_mode():
+        out = lama(model)(torch.from_numpy(padded).permute(2, 0, 1)[None], torch.from_numpy(mask)[None, None])
+    return np.clip(out[0].permute(1, 2, 0).numpy()[:image.shape[0], :image.shape[1]], 0, 1)
+
+
 def paint(cover, box, model):
     """`cover` with `box` painted in by LaMa from the cover around it, at the cover's own resolution."""
-    import torch
     cover = cover.convert("RGB")
     l, t, r, b = box
     pad = int(CONTEXT * max(r - l, b - t))
@@ -143,25 +166,19 @@ def paint(cover, box, model):
     crop = np.asarray(cover.crop((cl, ct, cr, cb)), dtype=np.float32) / 255
     hole = np.zeros(crop.shape[:2], dtype=np.float32)
     hole[t - ct:b - ct, l - cl:r - cl] = 1
-    # LaMa takes sides in multiples of 8; the crop is padded by reflection and the padding cut off after.
-    ph, pw = (-crop.shape[0]) % 8, (-crop.shape[1]) % 8
-    image = np.pad(crop, ((0, ph), (0, pw), (0, 0)), mode="reflect")
-    mask = np.pad(hole, ((0, ph), (0, pw)), mode="reflect")
-    with torch.inference_mode():
-        out = lama(model)(torch.from_numpy(image).permute(2, 0, 1)[None], torch.from_numpy(mask)[None, None])
-    out = out[0].permute(1, 2, 0).numpy()[:crop.shape[0], :crop.shape[1]]
+    out = inpaint(crop, hole, model)
     # Only the hole takes LaMa's pixels, its edge softened a little into the cover's own.
     soft = np.asarray(Image.fromarray((hole * 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(1.5)), dtype=np.float32) / 255
     soft = np.maximum(soft, hole)[..., None]
-    mixed = crop * (1 - soft) + np.clip(out, 0, 1) * soft
+    mixed = crop * (1 - soft) + out * soft
     cleaned = cover.copy()
     cleaned.paste(Image.fromarray((mixed * 255 + 0.5).astype(np.uint8)), (cl, ct))
     return cleaned
 
 
-def clean(cover, model):
+def clean(cover, model, lines=None):
     """`cover` without its label, and the label's box, or the cover as it was and None."""
-    box = find(cover)
+    box = find(cover, lines)
     return (paint(cover, box, model), box) if box else (cover, None)
 
 

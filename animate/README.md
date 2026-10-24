@@ -1,11 +1,19 @@
 # Vitrine Animate
 
 Animates album covers on your own computer for the lock screen's **Animate this album's cover**
-(Settings → Mod Settings → lock screen). The phone sends the playing album's cover; this takes any
-Parental Advisory label off it (OCR finds it, LaMa paints in what was behind it), animates it with
-Wan 2.2 TI2V-5B in ComfyUI, morphs its end back into its start along the motion's optical flow, so
-the clip ends on the frame it starts on, draws the extended edges around it as the phone does, and
-hands the MP4 back. The phone keeps it for good, so it plays with the computer off. Finished clips are also kept in `clips/`.
+(Settings → Mod Settings → lock screen). The phone sends the playing album's cover with the album's
+name and artist, and this:
+
+- takes the Parental Advisory label off: it uses Apple's catalog copy of the cover when that is the
+  same picture (`catalog.py`), else finds the label by OCR and paints it out with LaMa (`label.py`);
+- animates it with Wan 2.2 TI2V-5B in ComfyUI, but only to measure the motion: the cover's own pixels
+  are moved along the clip's optical flow (`motion.py`), so its colors and detail stay its own. The
+  camera's part of the motion is taken out and the rest softened and capped; text does not move and
+  faces move only as a whole. The end turns back along the motion, so the clip ends on its first frame;
+- paints the cover on a little above and below it and fades that into a smooth blur (`frame.py`),
+  adds a light film grain, and hands the MP4 back.
+
+The phone keeps it for good, so it plays with the computer off. Finished clips are also kept in `clips/`.
 
 ## Setup (Windows, NVIDIA, 8 GB VRAM or more)
 
@@ -17,6 +25,8 @@ In one folder (`D:\VitrineAnimate` unless `VITRINE_ANIMATE` says otherwise):
   - `text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors` (Comfy-Org/Wan_2.1_ComfyUI_repackaged)
   - `vae/wan2.2_vae.safetensors` (Comfy-Org/Wan_2.2_ComfyUI_Repackaged)
 - `models/big-lama.pt`, from the release `add_big_lama` of Sanster/models on GitHub
+- `models/face_detection_yunet_2023mar.onnx`, from opencv/opencv_zoo on GitHub
+  (`models/face_detection_yunet`)
 - the label finder's OCR in ComfyUI's Python:
   `ComfyUI_windows_portable\python_embeded\python.exe -m pip install rapidocr_onnxruntime`
 
@@ -32,5 +42,7 @@ To leave labels on, add `--keep-labels` to the command in `start.bat`.
    The row reads Waiting, Animating and Saved. Music can keep playing with the phone locked.
    **Animate Again** makes a new loop in place of the old one.
 
-Only requests from the home network are answered. Settings (size, length, prompt) are at the top of
-`vitrine_animate.py`; the graph ComfyUI runs is `workflow.json`.
+Only requests from the home network are answered. The covers' album and artist names go to Apple's
+iTunes Search API to find a clean copy. Settings are at the top of each file: the model's size, length and
+prompt in `vitrine_animate.py`, how much things move and the grain in `motion.py`, and the edges' blur
+in `frame.py`. The graph ComfyUI runs is `workflow.json`.
