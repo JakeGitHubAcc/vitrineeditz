@@ -86,7 +86,7 @@ static CGImageRef newStreaks(CGImageRef cover, CGSize size, CGRect rect) CF_RETU
 static CGImageRef newFeather(CGFloat side) CF_RETURNS_RETAINED {
     size_t pixels = (size_t)side;
     CGColorSpaceRef gray = CGColorSpaceCreateDeviceGray();
-    CGContextRef context = CGBitmapContextCreate(NULL, pixels, pixels, 8, 0, gray, kCGImageAlphaNone);
+    CGContextRef context = CGBitmapContextCreate(NULL, pixels, pixels, 8, 0, gray, (CGBitmapInfo)kCGImageAlphaNone);
     CGFloat colors[] = {0, 1, 1, 1, 1, 1, 0, 1}, feather = kFeather;
     CGFloat locations[] = {0, feather, 1 - feather, 1};
     CGGradientRef ramp = CGGradientCreateWithColorComponents(gray, colors, locations, 4);
