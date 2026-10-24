@@ -181,18 +181,16 @@ static void showCover(NSString *picture) {
 NSString *SGLockMotionPlayingPicture(void) { return sg_picture; }
 NSString *SGLockMotionPlayingAlbum(void) { return sg_album.length ? sg_album : sg_title; }
 
-// The playing album's extended cover (SGExtendedClip.h), the frame the computer animates, sent as PNG.
+// The playing album's cover, sent as PNG. The computer takes any Parental Advisory label off it and draws
+// its extended edges as SGExtendedClip.m does, from the cleaned cover, so the label is not drawn out too.
 void SGLockMotionAnimatePlaying(void (^done)(NSString *error)) {
     NSString *picture = sg_picture, *album = SGLockMotionPlayingAlbum(), *title = sg_title;
     if (!picture || !sg_queue) {
         done(@"Play a song from the album first.");
         return;
     }
-    CGSize size = SGLyricsClipSize(SGMotionPixels());
     withCover(title, ^(CGImageRef cover) {
-        CGImageRef frame = SGExtendedClipFrame(cover, size);
-        NSData *png = frame ? UIImagePNGRepresentation([UIImage imageWithCGImage:frame]) : nil;
-        CGImageRelease(frame);
+        NSData *png = cover ? UIImagePNGRepresentation([UIImage imageWithCGImage:cover]) : nil;
         dispatch_async(dispatch_get_main_queue(), ^{ SGAnimatedCoverRequest(picture, album, png, done); });
     });
 }

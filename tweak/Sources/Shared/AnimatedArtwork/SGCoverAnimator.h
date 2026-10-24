@@ -17,7 +17,7 @@ extern NSNotificationName const SGAnimatedCoverSavedNotification;
 NSString *SGAnimatedCoverKey(NSString *picture);
 // The saved loop for the picture, or nil.
 NSURL *SGAnimatedCoverFile(NSString *picture);
-// Sends `png`, the cover's frame, to the computer and follows it until its loop is saved. `done` gets nil
+// Sends `png`, the cover, to the computer and follows it until its loop is saved. `done` gets nil
 // once the computer has it, else what went wrong.
 void SGAnimatedCoverRequest(NSString *picture, NSString *album, NSData *png, void (^done)(NSString *error));
 // Stops following a sent cover, or deletes a saved one.
