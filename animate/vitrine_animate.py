@@ -23,6 +23,8 @@ ComfyUI's own Python (start.bat), which has everything it imports.
                                                         (a cover sent again is animated again)
     GET  /status?key=K                    -> {"state": ..., "progress": 0..1, "position": n, "error": ...}
     GET  /clip?key=K                      -> the MP4
+    GET  /clips                           -> {"clips": [{"key", "album", "artist", "bytes"}]}: every MP4 kept,
+                                             for a phone that lost its own (Spotify deleted and installed again)
     GET  /health                          -> {"ok": true, ...}
 """
 import argparse
@@ -102,6 +104,28 @@ class Jobs:
 
     def clip(self, key):
         return os.path.join(self.clips, key + ".mp4")
+
+    def remember(self, key, names):
+        """The album and artist a clip was made for, kept beside it for GET /clips."""
+        about = {name: names[name] for name in ("album", "artist") if names.get(name)}
+        with open(os.path.join(self.clips, key + ".json"), "w", encoding="utf-8") as f:
+            json.dump(about, f, ensure_ascii=False)
+
+    def kept(self):
+        """Every clip in the folder: its key, its size, and its album and artist where they were kept."""
+        out = []
+        for name in sorted(os.listdir(self.clips)):
+            key, ext = os.path.splitext(name)
+            if ext != ".mp4" or not re.fullmatch(r"[0-9a-f]{32}", key):
+                continue
+            item = {"key": key, "bytes": os.path.getsize(os.path.join(self.clips, name))}
+            try:
+                with open(os.path.join(self.clips, key + ".json"), encoding="utf-8") as f:
+                    item.update({k: v for k, v in json.load(f).items() if k in ("album", "artist")})
+            except (OSError, ValueError):
+                pass
+            out.append(item)
+        return out
 
     def add(self, key, png, names):
         with self.lock:
@@ -478,6 +502,7 @@ def work(jobs, comfy, lama, faces, keep_labels, persons=None, scenes=None, finde
             progress(0.96, "saving the clip")
             encode([np.clip(np.round(motion.grained(f, s)), 0, 255).astype(np.uint8) for f, s in zip(clip, seeds)], jobs.clip(key))
             seconds = time.time() - started
+            jobs.remember(key, names)
             progress(1.0, "done")
             jobs.finish(key, seconds=seconds)
             say(f"saved {key}.mp4 in {seconds / 60:.1f} min")
@@ -523,6 +548,8 @@ def handler(jobs):
             path = urlparse(self.path).path
             if path == "/health":
                 return self.answer(200, {"ok": True, "name": "Vitrine Animate", "size": [OUT_W, OUT_H]})
+            if path == "/clips":
+                return self.answer(200, {"clips": jobs.kept()})
             key = self.key()
             if not key:
                 return self.answer(400, {"error": "bad key"})

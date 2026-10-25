@@ -107,6 +107,25 @@ NSArray *SGLockScreenMotionRows(void) {
         sway.visible = lowData.visible;
         SGModRow *kept = SGStatRow(@"Animated covers saved", ^NSString *{ return [NSString stringWithFormat:@"%lu", (unsigned long)SGAnimatedCoverCount()]; });
         kept.visible = lowData.visible;
+        // The covers the computer made, for a Spotify deleted and installed again; also done on its own at launch.
+        SGModRow *restore = SGActionRow(@"Copy covers from computer", @"Downloads every animated cover Vitrine Animate has made "
+                                                                       @"that this iPhone doesn't have, such as after Spotify is deleted "
+                                                                       @"and installed again. Also happens on its own when Spotify opens", ^{
+            void (^copy)(void) = ^{
+                SGAnimatedCoverRestore(^(NSUInteger added, NSString *error) {
+                    NSString *message = error ?: (added ? [NSString stringWithFormat:@"%lu animated cover%@ copied to this iPhone.",
+                                                                    (unsigned long)added, added == 1 ? @"" : @"s"]
+                                                        : @"This iPhone already has every cover your computer made.");
+                    UIAlertController *alert = [UIAlertController alertControllerWithTitle:error ? @"Not copied" : @"Animated covers"
+                                                                                   message:message preferredStyle:UIAlertControllerStyleAlert];
+                    [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleCancel handler:nil]];
+                    [SGTopController() presentViewController:alert animated:YES completion:nil];
+                });
+            };
+            if (SGAnimatedCoverServer()) copy();
+            else SGAnimatedCoverAskServer(nil);   // which copies them once the address is saved
+        });
+        restore.visible = lowData.visible;
         return @[
             SGChoiceRow(@"Full-screen artwork", @"The Canvas or Apple Music's animated cover, or the lyrics a line at a time. "
                                                  @"Every song shows the cover where a song has neither, in the style picked below. "
@@ -122,6 +141,7 @@ NSArray *SGLockScreenMotionRows(void) {
             sway,
             computer,
             kept,
+            restore,
             lowData,
         ];
     }

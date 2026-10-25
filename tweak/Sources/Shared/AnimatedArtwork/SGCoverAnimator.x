@@ -78,6 +78,13 @@ NSString *SGAnimatedCoverAlbumPicture(NSString *artist, NSString *album) {
     return name ? [@"spotify-album:" stringByAppendingString:name] : nil;
 }
 
+static void listKey(NSString *name, NSString *key) {
+    NSMutableDictionary *list = [NSMutableDictionary dictionaryWithContentsOfURL:listFile()] ?: [NSMutableDictionary dictionary];
+    if ([list[name] isEqual:key]) return;
+    list[name] = key;
+    [list writeToURL:listFile() error:nil];
+}
+
 void SGAnimatedCoverList(NSString *picture, NSString *artist, NSString *album) {
     NSString *name = albumName(artist, album);
     if (!name || !picture.length) return;
@@ -297,6 +304,73 @@ NSUInteger SGAnimatedCoverCount(void) {
     return [files filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"self ENDSWITH '.mp4'"]].count;
 }
 
+#pragma mark - restoring from the computer
+
+// The computer keeps every loop it made (GET /clips), and Spotify deleted and installed again keeps none: each one
+// this iPhone lacks is downloaded, one at a time, into the kept folder, and listed under its album where the
+// computer kept its names. A loop is kept under the same key it was made under, so a song finds it as it did.
+static BOOL sg_restoring;
+
+static void restoreNext(NSArray<NSDictionary *> *clips, NSUInteger index, NSUInteger added,
+                        void (^done)(NSUInteger added, NSString *error)) {
+    if (index >= clips.count) {
+        sg_restoring = NO;
+        if (added) SGLog(@"animate: %lu animated covers restored from the computer", (unsigned long)added);
+        if (added) [NSNotificationCenter.defaultCenter postNotificationName:SGAnimatedCoverSavedNotification object:nil];
+        if (done) done(added, nil);
+        return;
+    }
+    NSDictionary *clip = clips[index];
+    NSString *key = clip[@"key"];
+    NSString *name = albumName(clip[@"artist"], clip[@"album"]);
+    if (name) listKey(name, key);
+    if ([NSFileManager.defaultManager fileExistsAtPath:savedFor(key).path]) {
+        restoreNext(clips, index + 1, added, done);
+        return;
+    }
+    [[NSURLSession.sharedSession downloadTaskWithURL:endpoint(@"clip", key, nil) completionHandler:^(NSURL *temporary, NSURLResponse *response, NSError *error) {
+        BOOL ok = !error && temporary && [response isKindOfClass:NSHTTPURLResponse.class] && ((NSHTTPURLResponse *)response).statusCode == 200;
+        if (ok) ok = [NSFileManager.defaultManager moveItemAtURL:temporary toURL:savedFor(key) error:nil];
+        dispatch_async(dispatch_get_main_queue(), ^{ restoreNext(clips, index + 1, added + (ok ? 1 : 0), done); });
+    }] resume];
+}
+
+void SGAnimatedCoverRestore(void (^done)(NSUInteger added, NSString *error)) {
+    NSURL *base = endpoint(@"clips", @"", nil);
+    if (!base || sg_restoring) {
+        if (done) done(0, base ? @"Already copying covers from your computer." : @"No computer address is entered.");
+        return;
+    }
+    sg_restoring = YES;
+    NSURLComponents *url = [NSURLComponents componentsWithURL:base resolvingAgainstBaseURL:NO];
+    url.queryItems = nil;
+    NSURLRequest *request = [NSURLRequest requestWithURL:url.URL cachePolicy:NSURLRequestReloadIgnoringLocalCacheData timeoutInterval:10];
+    [[NSURLSession.sharedSession dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        NSDictionary *answer = answerIn(data, response, error);
+        NSMutableArray<NSDictionary *> *clips = [NSMutableArray array];
+        id listed = answer[@"clips"];
+        for (id clip in [listed isKindOfClass:NSArray.class] ? listed : @[]) {
+            if (![clip isKindOfClass:NSDictionary.class] || ![clip[@"key"] isKindOfClass:NSString.class]) continue;
+            NSString *key = clip[@"key"];
+            if (key.length != 32 || [key rangeOfCharacterFromSet:[NSCharacterSet characterSetWithCharactersInString:@"0123456789abcdef"].invertedSet].location != NSNotFound) continue;
+            NSMutableDictionary *kept = [NSMutableDictionary dictionaryWithObject:key forKey:@"key"];
+            for (NSString *field in @[@"album", @"artist"]) {
+                if ([clip[field] isKindOfClass:NSString.class]) kept[field] = clip[field];
+            }
+            [clips addObject:kept];
+        }
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (!answer) {
+                sg_restoring = NO;
+                if (done) done(0, [NSString stringWithFormat:@"Vitrine Animate did not answer at %@. Check that it is running on "
+                                                             @"your computer and that both are on the same Wi-Fi.", SGAnimatedCoverServer()]);
+                return;
+            }
+            restoreNext(clips, 0, 0, done);
+        });
+    }] resume];
+}
+
 void SGAnimatedCoverAskServer(void (^then)(void)) {
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Your computer"
         message:@"The address Vitrine Animate shows when it starts on your computer, such as 192.168.1.20:8790."
@@ -315,6 +389,8 @@ void SGAnimatedCoverAskServer(void (^then)(void)) {
         if (!server.length) return;
         [NSUserDefaults.standardUserDefaults setObject:server forKey:SGKeyAnimateServer];
         poll();
+        // The covers the computer made before, which a reinstalled Spotify no longer has.
+        SGAnimatedCoverRestore(nil);
         if (then) then();
     }]];
     [SGTopController() presentViewController:alert animated:YES completion:nil];
@@ -323,6 +399,10 @@ void SGAnimatedCoverAskServer(void (^then)(void)) {
 %ctor {
     sg_status = [NSMutableDictionary dictionary];
     sg_asking = [NSMutableSet set];
-    // Covers sent before a relaunch are followed again once the app has settled.
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{ follow(); });
+    // Covers sent before a relaunch are followed again once the app has settled, and any the computer kept that
+    // this iPhone lacks are copied over, quietly: a computer out of reach just leaves them for the next launch.
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+        follow();
+        if (SGAnimatedCoverServer()) SGAnimatedCoverRestore(nil);
+    });
 }
