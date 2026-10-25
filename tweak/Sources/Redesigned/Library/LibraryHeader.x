@@ -254,9 +254,7 @@ static NSArray<UIView *> *placeFolder(UIView *header) {
     return placed;
 }
 
-static void layoutRoot(UIView *page) {
-    UIView *header = childNamed(page, @"YourLibraryHeaderView");
-    if (!header) return;
+static void layoutRootHeader(UIView *header) {
     [header layoutIfNeeded];
     SGRLibraryClearScrim(header);
 
@@ -275,9 +273,7 @@ static void layoutRoot(UIView *page) {
     }
 }
 
-static void layoutFolder(UIView *page) {
-    UIView *header = childNamed(page, @"FolderHeaderView");
-    if (!header) return;
+static void layoutFolderHeader(UIView *header) {
     [header layoutIfNeeded];
     SGRLibraryClearScrim(header);
 
@@ -295,17 +291,35 @@ static void layoutFolder(UIView *page) {
     }
 }
 
+// Each header is laid out from its own pass too, wherever the page puts it: found only from the page's pass, as
+// the page's direct subview, a header Spotify nests deeper is never found and the page keeps Spotify's (9.1.94).
 %hook _TtC28YourLibrary_YourLibraryXImpl15YourLibraryView
 - (void)layoutSubviews {
     %orig;
-    layoutRoot((UIView *)self);
+    UIView *header = childNamed((UIView *)self, @"YourLibraryHeaderView");
+    if (header) layoutRootHeader(header);
+}
+%end
+
+%hook _TtC28YourLibrary_YourLibraryXImpl21YourLibraryHeaderView
+- (void)layoutSubviews {
+    %orig;
+    layoutRootHeader((UIView *)self);
 }
 %end
 
 %hook _TtC22YourLibrary_FolderImpl10FolderView
 - (void)layoutSubviews {
     %orig;
-    layoutFolder((UIView *)self);
+    UIView *header = childNamed((UIView *)self, @"FolderHeaderView");
+    if (header) layoutFolderHeader(header);
+}
+%end
+
+%hook _TtC22YourLibrary_FolderImpl16FolderHeaderView
+- (void)layoutSubviews {
+    %orig;
+    layoutFolderHeader((UIView *)self);
 }
 %end
 
@@ -314,7 +328,9 @@ static void layoutFolder(UIView *page) {
     %init;
     SGRequireClasses(@[
         @"_TtC28YourLibrary_YourLibraryXImpl15YourLibraryView",
+        @"_TtC28YourLibrary_YourLibraryXImpl21YourLibraryHeaderView",
         @"_TtC22YourLibrary_FolderImpl10FolderView",
+        @"_TtC22YourLibrary_FolderImpl16FolderHeaderView",
         @"_TtC21YourLibrary_CommonKit35YourLibraryHeaderContentFiltersView",
         @"_TtC29ListeningActivity_ElementsKit21AdaptiveFaceContainer",
     ]);
