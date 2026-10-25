@@ -2,10 +2,23 @@
 // setup (objc-methods.txt:38809).
 #import "Core/SGCore.h"
 #import "Headers/SPTLinkDispatcherImplementation.h"
+#import "Settings/SGPage.h"
+#import "Settings/SGPageStyle.h"
 #import "Links.h"
 #import <objc/message.h>
 
 static __weak SPTLinkDispatcherImplementation *sg_linkDispatcher;
+static NSMutableDictionary<NSString *, UIViewController *(^)(void)> *sg_modPages;
+
+void SGRegisterModPage(NSString *uri, UIViewController *(^make)(void)) {
+    if (!sg_modPages) sg_modPages = [NSMutableDictionary dictionary];
+    sg_modPages[uri.lowercaseString] = [make copy];
+}
+
+static UIViewController *(^modPageFor(NSURL *uri))(void) {
+    if (![uri.scheme.lowercaseString isEqualToString:@"vitrine"]) return nil;
+    return sg_modPages[uri.absoluteString.lowercaseString];
+}
 
 id SGLinkDispatcher(void) {
     return sg_linkDispatcher;
@@ -16,6 +29,13 @@ id SGLinkDispatcher(void) {
 // [[SPTUBINavigationReason alloc] initWithSourceApplication:nil interactionID:<its interactionID>] and no handlers
 // (read off the 9.1.78 binary), so later versions get the same. A nil reason crashes: Swift reads it as an enum.
 BOOL SGOpenSpotifyURI(NSURL *uri) {
+    UIViewController *(^make)(void) = modPageFor(uri);
+    if (make) {
+        UIViewController *top = SGTopController();
+        if (!top) return NO;
+        SGShowPage(top, make());
+        return YES;
+    }
     SPTLinkDispatcherImplementation *dispatcher = sg_linkDispatcher;
     if (!uri || !dispatcher) return NO;
     if ([dispatcher respondsToSelector:@selector(navigateToURI:options:interactionID:)]) {
@@ -74,6 +94,11 @@ static NSString *takerFor(id<NSFastEnumeration> handlers, NSURL *uri, NSUInteger
 SGLinkRoute SGSpotifyURIRoute(NSURL *uri, NSString **via) {
     if (via) *via = nil;
     if (!uri) return SGLinkRouteNone;
+    if ([uri.scheme.lowercaseString isEqualToString:@"vitrine"]) {
+        if (!modPageFor(uri)) return SGLinkRouteNone;
+        if (via) *via = @"the mod's own page";
+        return SGLinkRouteOpens;
+    }
     id linkHandler = sg_send(sg_linkDispatcher, @"spotifyLinkHandler");
     id handlers = sg_send(sg_send(linkHandler, @"URISubtypeRegistry"), @"handlers");
     if (![handlers conformsToProtocol:@protocol(NSFastEnumeration)]) return SGLinkRouteUnknown;

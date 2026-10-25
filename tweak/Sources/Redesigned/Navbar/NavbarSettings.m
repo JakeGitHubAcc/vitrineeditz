@@ -3,6 +3,7 @@
 #import "Settings/SGPageStyle.h"
 #import "Navbar.h"
 #import "Shared/Navigation/AddTabSheet.h"
+#import "Shared/Navigation/TabIcons.h"
 #import "Redesigned/Kit/SGRTokens.h"
 
 // What "Add a tab" offers: URIs Spotify's own router resolves to a page of its own, each with the
@@ -29,6 +30,8 @@ static NSArray<NSDictionary *> *tabPresets(void) {
         @{SGTabTitle: @"Concerts", SGTabURI: @"spotify:concerts", SGTabIcon: @"events"},
         @{SGTabTitle: @"Queue", SGTabURI: @"spotify:now-playing:queue", SGTabIcon: @"queue"},
         @{SGTabTitle: @"Create", SGTabURI: @"spotify:create-menu", SGTabIcon: @"plus"},
+        // The mod's own (Redesigned/Library/RecordsPage.m).
+        @{SGTabTitle: @"Records", SGTabURI: @"vitrine:records", SGTabIcon: @"opticaldisc.fill", SGTabIconSet: SGTabIconSetSymbols},
     ];
 }
 
@@ -64,6 +67,15 @@ static NSMutableDictionary *tabEntry(NSDictionary *tab) {
 static void appendTab(NSDictionary *tab) {
     SGRSetNavbarLayout([navbarEntries() arrayByAddingObject:tabEntry(tab)]);
     SGRRefreshTabBar();
+}
+
+void SGRNavbarAddTabOnce(NSString *key, NSDictionary *tab) {
+    if (SGHidden(key)) return;
+    SGSetEnabled(key, YES);
+    for (NSDictionary *entry in [SGRNavbarLayout() arrayByAddingObjectsFromArray:SGRNavbarSplit()]) {
+        if ([entry[SGRNavbarURI] isEqual:tab[SGTabURI]]) return;
+    }
+    appendTab(tab);
 }
 
 // The identities of Spotify's own tabs that stand in the split list: they leave the bar's list while they do.

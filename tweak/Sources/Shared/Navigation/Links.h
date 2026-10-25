@@ -1,9 +1,13 @@
 // Opening a spotify: URI the way the app opens a link of its own, through its link dispatcher: the
 // tabs of the mod's own on either look's bar, the redesigned player's lyrics glyph.
-#import <Foundation/Foundation.h>
+#import <UIKit/UIKit.h>
 
-// NO before the dispatcher is set up, or for a nil URI.
+// NO before the dispatcher is set up, or for a nil URI. A vitrine: URI is one of the mod's own pages
+// (SGRegisterModPage), pushed onto the selected tab's stack without the dispatcher.
 BOOL SGOpenSpotifyURI(NSURL *uri);
+// A page of the mod's own that a tab can open, as `uri` (vitrine:<name>): `make` builds a new one for
+// each open. Registered at load; the route below says such a URI opens.
+void SGRegisterModPage(NSString *uri, UIViewController *(^make)(void));
 id SGLinkDispatcher(void);   // SPTLinkDispatcherImplementation, nil until it is set up
 
 // Whether the dispatcher has somewhere to send a URI, asked the way it asks itself before it opens

@@ -4,20 +4,19 @@
 // grabber, a row per artist -- the picture round, the name, "Artist" under it and Follow or Following at the
 // trailing edge -- and a row for the album, its cover square, its name and its type. A row opens what it names.
 //
-// An artist is found by name with the Web API's search (GET api.spotify.com/v1/search, type artist), asked with the
-// signed-in app's own bearer token (SGSpclientHeaders): the artist named exactly, else the first one found, which
+// An artist is found by name with the Web API's search (GET api.spotify.com/v1/search, type artist), asked as the
+// signed-in app (Shared/Navigation/WebAPI.h): the artist named exactly, else the first one found, which
 // gives the row its picture. Whether the user follows them is asked the same way (GET /v1/me/following/contains)
 // and Follow changes it (PUT or DELETE /v1/me/following); the button shows only once that has answered. An artist
 // that cannot be found opens Spotify's search for the name instead.
 #import "Core/SGCore.h"
 #import "Settings/SGPageStyle.h"
-#import "Shared/Lyrics/Lyrics.h"
 #import "Shared/Navigation/Links.h"
+#import "Shared/Navigation/WebAPI.h"
 #import "Shared/Player/PlayerState.h"
 #import "LocalAlbums.h"
 #import "LocalFiles.h"
 
-static NSTimeInterval const kRequestTimeout = 8;
 // The sheet's measures, read off Spotify's: the row, its picture, the side margin and the gap after the picture,
 // the room above the first row for the grabber and under the last, and the corner.
 static const CGFloat kRow = 76, kPicture = 56, kSide = 24, kGap = 16, kTop = 28, kBottom = 20, kCorner = 38;
@@ -36,30 +35,9 @@ static NSString *escaped(NSString *text) {
     return [text stringByAddingPercentEncodingWithAllowedCharacters:NSCharacterSet.alphanumericCharacterSet] ?: @"";
 }
 
-// `done` on main with the status and the JSON answer (nil for none), 0 when the app's token is not known yet.
-static void webAPI(NSString *method, NSString *path, void (^done)(NSInteger status, id answer)) {
-    SGSpclientHeaders(^(NSDictionary<NSString *, NSString *> *headers) {
-        NSString *bearer = headers[@"Authorization"] ?: headers[@"authorization"];
-        if (!bearer.length) {
-            done(0, nil);
-            return;
-        }
-        NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:[@"https://api.spotify.com/v1/" stringByAppendingString:path]]];
-        request.HTTPMethod = method;
-        request.timeoutInterval = kRequestTimeout;
-        [request setValue:bearer forHTTPHeaderField:@"Authorization"];
-        [request setValue:@"application/json" forHTTPHeaderField:@"Accept"];
-        [[NSURLSession.sharedSession dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
-            NSInteger status = [response isKindOfClass:NSHTTPURLResponse.class] ? ((NSHTTPURLResponse *)response).statusCode : 0;
-            id answer = data.length ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
-            dispatch_async(dispatch_get_main_queue(), ^{ done(status, answer); });
-        }] resume];
-    });
-}
-
 // The artist named `name`: {uri, id, image (an address, may be missing)}, nil when none was found.
 static void findArtist(NSString *name, void (^done)(NSDictionary *artist)) {
-    webAPI(@"GET", [NSString stringWithFormat:@"search?type=artist&limit=10&q=%@", escaped(name)], ^(NSInteger status, id answer) {
+    SGWebAPI(@"GET", [NSString stringWithFormat:@"search?type=artist&limit=10&q=%@", escaped(name)], ^(NSInteger status, id answer) {
         id items = status == 200 && [answer isKindOfClass:NSDictionary.class] ? answer[@"artists"][@"items"] : nil;
         NSDictionary *found = nil;
         for (id item in [items isKindOfClass:NSArray.class] ? items : @[]) {
@@ -248,7 +226,7 @@ static void openSearch(NSString *name) {
                 if (picture) dispatch_async(dispatch_get_main_queue(), ^{ weakRow.picture.image = picture; });
             }] resume];
         }
-        webAPI(@"GET", [@"me/following/contains?type=artist&ids=" stringByAppendingString:artist[@"id"]], ^(NSInteger status, id answer) {
+        SGWebAPI(@"GET", [@"me/following/contains?type=artist&ids=" stringByAppendingString:artist[@"id"]], ^(NSInteger status, id answer) {
             SGLocalLinksSheet *sheet = weakSelf;
             if (!sheet || status != 200 || ![answer isKindOfClass:NSArray.class] || ![answer count]) return;
             BOOL following = [[answer firstObject] boolValue];
@@ -300,7 +278,7 @@ static void openSearch(NSString *name) {
     [row showFollowing:now];
     __weak SGLocalLinksSheet *weakSelf = self;
     __weak SGLocalLinkRow *weakRow = row;
-    webAPI(now ? @"PUT" : @"DELETE", [@"me/following?type=artist&ids=" stringByAppendingString:artist[@"id"]], ^(NSInteger status, id answer) {
+    SGWebAPI(now ? @"PUT" : @"DELETE", [@"me/following?type=artist&ids=" stringByAppendingString:artist[@"id"]], ^(NSInteger status, id answer) {
         if (status >= 200 && status < 300) return;
         SGLog(@"local files: following an artist failed (status %ld)", (long)status);
         SGLocalLinksSheet *sheet = weakSelf;

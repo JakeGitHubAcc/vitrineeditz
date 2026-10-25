@@ -33,6 +33,10 @@ void SGRSetNavbarStock(NSArray<NSString *> *stock);
 // that replaced them, so a tab saved back then works without being added again.
 NSURL *SGRNavbarTabURL(NSString *uri);
 
+// NavbarSettings.m. Puts `tab` (Shared/Navigation/AddTabSheet.h's keys) at the end of the bar once, the first
+// time `key` is asked: not again once it has been removed, nor when a tab already opens its URI.
+void SGRNavbarAddTabOnce(NSString *key, NSDictionary *tab);
+
 // Navbar.x, called from the tab bar's layout passes in TabBar.x.
 void SGRComposeTabBar(UIView *tabBar);
 void SGRLogTabBarRow(UIView *tabBar);
