@@ -21,6 +21,9 @@ LONG = 8.0
 # clip them); how far a letter's shade must be from the box's usual one, out of 255; how far the letters
 # are grown for their soft edges, and the soft edge of the fade's mask, in pixels.
 ERASE_PAD, LETTER_CONTRAST, GLYPH_GROW, FADE_EDGE = 0.08, 60, 3, 2
+# In a loose box, a part filling more than this share of its own bounds, and bigger than this share of the box, is a
+# block (a window in a wall) rather than a letter.
+LETTER_SOLID, LETTER_BLOCK = 0.8, 0.01
 # A drop shadow or dark outline: as far from the letters as it is looked for, as a share of the line's
 # height, and how much darker than what is behind it a pixel must be to be one, out of 255.
 SHADOW_REACH, SHADOW_DARKER = 0.2, 8
@@ -33,7 +36,10 @@ SHOWN_FIRST, SHOWN_LAST, FADE = 0.3, 0.12, 1.2
 SPRAY_EDGE, SPRAY_ROUGH, SPRAY_SPECKLE, SPRAY_WAVER, SPRAY_DOT = 0.14, 0.12, 0.16, 0.03, 0.7
 # Line boil: how many redrawn copies, how many frames each is held (on threes at 24 fps), how far a line wavers
 # broadly and trembles finely (pixels, a deviation), and the waver's size (a share of the side) and tremble's (pixels).
-BOIL_COPIES, BOIL_HOLD, BOIL_SHIFT, BOIL_TREMBLE, BOIL_BROAD, BOIL_FINE = 3, 3, 1.1, 0.45, 0.015, 1.6
+BOIL_COPIES, BOIL_HOLD, BOIL_SHIFT, BOIL_TREMBLE, BOIL_BROAD, BOIL_FINE = 3, 3, 0.6, 0.3, 0.015, 1.6
+# Which lines boil: the edges' thresholds, how near a figure they must be (a share of the side), and the band around
+# a line that moves with it (pixels).
+BOIL_EDGE_LOW, BOIL_EDGE_HIGH, BOIL_NEAR, BOIL_BAND = 60, 160, 0.006, 2
 # The sway: the drift sideways and up and down and the push in, as shares of the frame's width, and the
 # tilt in degrees. The frame is always enlarged by at least ZOOM_LEAST, so its edges never show.
 DRIFT_X, DRIFT_Y, PUSH, TILT, ZOOM_LEAST = 0.005, 0.003, 0.012, 0.25, 1.025
@@ -53,20 +59,41 @@ def letters(patch):
     return ~light if edge.mean() > 0.5 else light
 
 
-def hole(cover, boxes):
+def lettered(found):
+    """Of what letters() found in a loose box (the finder's, not a line the reader read), only what looks like
+    letters: no part touching the box's edge (an arm reaching in, To the Stars) and no part that fills its own
+    bounds nearly whole (a window set in the wall); nothing at all when letters() found none."""
+    count, parts, stats, _ = cv2.connectedComponentsWithStats(found.astype(np.uint8))
+    h, w = found.shape
+    keep = np.zeros(count, bool)
+    for k in range(1, count):
+        x, y, bw, bh, area = stats[k]
+        touches = x == 0 or y == 0 or x + bw >= w or y + bh >= h
+        solid = area / max(bw * bh, 1) > LETTER_SOLID and bw * bh > LETTER_BLOCK * w * h
+        keep[k] = not touches and not solid and area >= 4
+    return keep[parts]
+
+
+def hole(cover, boxes, loose=()):
     """1 over the letters of each line of text in `cover` (RGB array, square), not the box around them,
     grown by GLYPH_GROW for their soft edges, so a design next to the text, or inside its box, stays. A line
-    whose letters cannot be told from their background is painted out whole. Boxes are shares of the side."""
+    whose letters cannot be told from their background is painted out whole; a box in `loose` (the finder's)
+    only where letters are told from it (lettered()). Boxes are shares of the side."""
     size = cover.shape[0]
     gray = cv2.cvtColor(cover, cv2.COLOR_RGB2GRAY)
     mask = np.zeros((size, size), bool)
-    for l, t, r, b in boxes:
+    for box in list(boxes) + list(loose):
+        l, t, r, b = box
         grow = ERASE_PAD * (b - t)
         x0, y0 = max(0, int((l - grow) * size)), max(0, int((t - grow) * size))
         x1, y1 = min(size, int(math.ceil((r + grow) * size))), min(size, int(math.ceil((b + grow) * size)))
         if x1 - x0 < 2 or y1 - y0 < 2:
             continue
         found = letters(gray[y0:y1, x0:x1])
+        if box in loose:
+            if found is not None:
+                mask[y0:y1, x0:x1] |= lettered(found)
+            continue
         mask[y0:y1, x0:x1] |= True if found is None else found
     return binary_dilation(mask, iterations=GLYPH_GROW)
 
@@ -93,11 +120,12 @@ def shadow(cover, behind, letters, boxes):
     return binary_dilation(found, iterations=1)
 
 
-def plate(cover, boxes, lama):
+def plate(cover, boxes, lama, loose=()):
     """`cover` (PIL, square) with its text and its shadow painted out by LaMa, and the mask of where they
-    were, soft at its edge."""
+    were, soft at its edge. `loose` are the finder's text boxes, whose letters are told more strictly (hole())."""
     image = np.asarray(cover)
-    where = hole(image, boxes)
+    where = hole(image, boxes, loose)
+    boxes = list(boxes) + list(loose)
     # What is behind the letters and around them, to tell their shadow from it.
     reach = max([int(round(SHADOW_REACH * (b - t) * image.shape[0])) for _, t, _, b in boxes] + [2])
     behind = label.inpaint(image.astype(np.float32) / 255, binary_dilation(where, iterations=reach).astype(np.float32), lama) * 255
@@ -131,13 +159,30 @@ def faded(cover, text, mask, amount):
     return cover * (1 - a) + text * a
 
 
-class Boil:
-    """Line boil, for a drawn cover: the drawing as if redrawn a few times by hand and the copies cycled, each held
-    for a few frames as animation is drawn on twos, so its lines shimmer and jump a little while the picture stays.
-    Each copy is the cover moved along a field of its own, broad wavers and a fine tremble, a pixel or two at most.
-    The last frame takes the first frame's copy, so the loop closes."""
+def boil_lines(cover, subjects):
+    """Where line boil goes, 0 to 1: the drawn lines (the cover's edges) of `subjects` (0 to 1, the people and things
+    cut out), in a thin soft band, so the outlines of the figures boil and the rest of the picture holds still. The
+    whole picture boiling was too harsh (The Re-Up). With no subjects, the cover's strongest lines."""
+    gray = cv2.cvtColor(np.clip(cover, 0, 255).astype(np.uint8), cv2.COLOR_RGB2GRAY)
+    side = gray.shape[0]
+    near = binary_dilation(subjects > 0.5, iterations=max(1, int(round(BOIL_NEAR * side))))
+    if near.any():
+        lines = cv2.Canny(gray, BOIL_EDGE_LOW, BOIL_EDGE_HIGH) > 0
+        lines &= near
+    else:
+        lines = cv2.Canny(gray, BOIL_EDGE_LOW * 2, BOIL_EDGE_HIGH * 2) > 0
+    band = gaussian_filter(binary_dilation(lines, iterations=BOIL_BAND).astype(np.float32), 1.0)
+    return np.clip(band * 1.5, 0, 1).astype(np.float32)
 
-    def __init__(self, side, seed):
+
+class Boil:
+    """Line boil, for a drawn cover: its lines as if redrawn a few times by hand and the copies cycled, each held
+    for a few frames as animation is drawn on twos, so the outlines shimmer and jump a little while the picture
+    stays. Each copy moves the lines in `region` (boil_lines()) along a field of its own, broad wavers and a fine
+    tremble, under a pixel mostly. The last frame takes the first frame's copy, so the loop closes."""
+
+    def __init__(self, side, seed, region):
+        self.region = region[..., None]
         rng = np.random.default_rng(seed)
         y, x = np.mgrid[0:side, 0:side].astype(np.float32)
         self.maps = []
@@ -154,7 +199,8 @@ class Boil:
     def over(self, frame, i, n):
         copy = 0 if i == n - 1 else (i // BOIL_HOLD) % BOIL_COPIES
         map_x, map_y = self.maps[copy]
-        return cv2.remap(frame, map_x, map_y, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
+        boiled = cv2.remap(frame, map_x, map_y, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
+        return frame * (1 - self.region) + boiled * self.region
 
 
 class Spray:

@@ -386,8 +386,8 @@ def work(jobs, comfy, lama, faces, keep_labels, persons=None, scenes=None, finde
             text = [tuple(v / cover.width for v in box) for _, score, box in lines if score > 0.5]
             people = [tuple(v / shown.width for v in box) for box in motion.faces(np.asarray(shown), faces)]
             # Text the reader misses (in perspective on To the Stars' wall), as the finder names it.
-            text += props.text_boxes(np.asarray(shown), finders, text, people) if finders else []
-            wording = names.get("text", "keep") if text and lama else "keep"
+            loose = props.text_boxes(np.asarray(shown), finders, text, people) if finders else []
+            wording = names.get("text", "keep") if (text or loose) and lama else "keep"
             if wording not in ("keep", "fade", "hide", "spray"):
                 wording = "keep"
             sway = names.get("sway") == "1"
@@ -397,7 +397,9 @@ def work(jobs, comfy, lama, faces, keep_labels, persons=None, scenes=None, finde
             say(f"{len(text)} lines of text ({wording}), {len(people)} faces, {'a' if sway else 'no'} camera sway"
                 f"{', line boil' if boil else ''}{', off: ' + ', '.join(sorted(off)) if off else ''}")
             # Hidden text is painted out of what moves; faded text is painted out under the text laid over it.
-            erased, where = effects.plate(shown, text, lama) if wording != "keep" else (None, None)
+            # The finder's boxes are loose, so only what looks like letters in them is painted out (effects.hole()).
+            erased, where = effects.plate(shown, text, lama, loose) if wording != "keep" else (None, None)
+            text = text + loose
             moving = erased if wording == "hide" else shown
             extended = Extended(erased if erased is not None else shown, lama)
             moving.resize((SIDE, SIDE), Image.LANCZOS).save(os.path.join(inputs, image_name))
@@ -496,7 +498,9 @@ def work(jobs, comfy, lama, faces, keep_labels, persons=None, scenes=None, finde
                 boxes[extended.top:extended.top + side] = np.maximum(boxes[extended.top:extended.top + side], motion.soft_box(side, box, motion.TEXT_PAD, 0))
             text_in_frame = effects.unlit(boxes, OUT_W)
             patches = effects.lights((OUT_H, OUT_W)) if "light" not in off else []
-            boiling = effects.Boil(side, int(key[2:10], 16)) if boil else None
+            # Line boil on the drawn outlines of the people and things, the rest held still.
+            boiling = effects.Boil(side, int(key[2:10], 16), effects.boil_lines(np.asarray(shown, dtype=np.float32),
+                                   np.maximum(audience.anyone, things.mask))) if boil else None
             n = len(steps)
             clip = []
             for i, step in enumerate(steps):
