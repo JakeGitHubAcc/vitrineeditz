@@ -4,6 +4,7 @@
 // (SGCoverAnimator.h), and is walked again when one is saved for it.
 #import <objc/runtime.h>
 #import "Core/SGCore.h"
+#import "Shared/LocalFiles/LocalFiles.h"
 #import "Shared/Player/PlayerState.h"
 #import "AnimatedArtwork.h"
 #import "SGCoverAnimator.h"
@@ -65,6 +66,18 @@
     NSString *artist = [metadata[@"album_artist_name"] isKindOfClass:NSString.class] ? metadata[@"album_artist_name"]
                      : [metadata[@"artist_name"] isKindOfClass:NSString.class] ? metadata[@"artist_name"] : state.track.artistName;
     __weak SGMotionFollower *weakSelf = self;
+    // A local file has no Canvas or Apple Music cover to ask for (the ask for its Canvas never answered, and the
+    // cover made for it never showed): only the one the user's computer made, found by its album, the file's own
+    // artist and album rather than the credited names the player shows.
+    if (SGLocalFileIs(uri)) {
+        NSDictionary *info = SGLocalFileInfo(uri);
+        NSURL *file = SGAnimatedCoverFile(picture) ?: SGAnimatedCoverFileForAlbum(info[@"artist"], info[@"album"]);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            SGMotionFollower *follower = weakSelf;
+            if (follower && walk == follower->_walk) follower->_found(uri, file);
+        });
+        return;
+    }
     SGMotionClipFor(uri, canvas, state.track.artistName, metadata[@"album_title"], SGMotionTall, SGMotionPixels(), ^(NSURL *file, NSString *source) {
         SGMotionFollower *follower = weakSelf;
         if (!follower || walk != follower->_walk) return;
