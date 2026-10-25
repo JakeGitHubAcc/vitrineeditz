@@ -5,7 +5,7 @@ Animates album covers on your own computer for the lock screen's **Animate this 
 name and artist, and this:
 
 - takes the Parental Advisory label off: it uses Apple's catalog copy of the cover when that is the
-  same picture (`catalog.py`), else finds the label by OCR and paints it out with LaMa (`label.py`);
+  same picture of the same edition (`catalog.py`), else finds the label by OCR and paints it out with LaMa (`label.py`);
 - animates it with Wan 2.2 TI2V-5B in ComfyUI, but only to measure the motion: the cover's own pixels
   are moved along the clip's optical flow (`motion.py`), so its colors and detail stay its own. The
   camera's part of the motion is taken out and the rest softened and capped; text does not move and
@@ -13,6 +13,9 @@ name and artist, and this:
 - cuts people out, each on their own, over the background painted in behind them (`crowd.py`): a
   crowd's people sway slowly from where they stand and breathe, and the main person only breathes and
   sways a hair, so no body is bent out of shape;
+- finds things that move on their own by name with Grounding DINO and outlines them with SAM
+  (`props.py`): bees, butterflies and birds hover, clouds drift, flowers nod on their stems, and trees,
+  bushes and grass bend from where they stand;
 - has curtains sway on their own, as fabric hanging does, and keeps the model's motion off solid things
   such as a stage, a floor or walls, so their shape stays (`scene.py`);
 - paints the cover on a little above and below it and fades that into a smooth blur (`frame.py`);
@@ -42,6 +45,8 @@ In one folder (`D:\VitrineAnimate` unless `VITRINE_ANIMATE` says otherwise):
   (`models/face_detection_yunet`)
 - `models/maskrcnn_resnet50_fpn_v2_coco-73cbd019.pth`, torchvision's Mask R-CNN v2 weights, from
   `https://download.pytorch.org/models/maskrcnn_resnet50_fpn_v2_coco-73cbd019.pth`
+- `models/grounding-dino-base/` and `models/sam-vit-base/`, the Hugging Face models
+  `IDEA-Research/grounding-dino-base` and `facebook/sam-vit-base` (the JSON, text and safetensors files)
 - `models/segformer-b5-ade/`, the Hugging Face model `nvidia/segformer-b5-finetuned-ade-640-640`
   (`config.json`, `preprocessor_config.json` and `pytorch_model.bin`)
 - the label finder's OCR in ComfyUI's Python:

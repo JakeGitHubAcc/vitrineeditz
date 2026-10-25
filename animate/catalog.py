@@ -1,11 +1,13 @@
 """Looks up a clean copy of an album's cover: Apple's catalog (the iTunes Search API) keeps covers without
 Parental Advisory labels and at up to 1500 pixels. A copy is taken only when it is the same picture as the
-cover the phone sent, compared small, so another edition's or another album's cover never stands in.
+cover the phone sent, compared small, and of the same edition by its name (a Deluxe Edition's cover is
+often the regular one's with a word added), so another edition's or another album's cover never stands in.
 
     python catalog.py cover.png "Album" "Artist" out.png   # a test
 """
 import io
 import json
+import re
 import urllib.parse
 import urllib.request
 
@@ -18,6 +20,14 @@ SEARCH = "https://itunes.apple.com/search"
 SIZE, ALIKE = 1500, 0.9
 # The covers' colors may differ this much on average, out of 255, as two masterings of one picture do.
 COLOR = 18.0
+# Words that name an edition: a catalog album named with one the album asked for is not, is another edition.
+# ("Edition" and "Version" alone say nothing: "Deluxe" and "Deluxe Edition" are one.)
+EDITION = re.compile(r"\b(deluxe|expanded|remaster(?:ed)?|anniversary|bonus|special|collector'?s|"
+                     r"platinum|complete|tour|reloaded|extended|international)\b", re.I)
+
+
+def editions(name):
+    return {word.lower() for word in EDITION.findall(name or "")}
 
 
 def fetch(url, timeout=15):
@@ -42,12 +52,18 @@ def clean_copy(cover, album, artist):
     """The catalog's copy of `cover` at SIZE, or None when it has none that is the same picture."""
     if not album:
         return None
-    term = f"{artist} {album}" if artist else album
-    query = urllib.parse.urlencode({"term": term, "entity": "album", "limit": 15})
-    results = json.loads(fetch(f"{SEARCH}?{query}")).get("results", [])
+    # By artist and album, then by the album alone, which finds what an artist's name written another way
+    # ("Tyler, The Creator") hides.
+    results = []
+    for term in ([f"{artist} {album}"] if artist else []) + [album]:
+        query = urllib.parse.urlencode({"term": term, "entity": "album", "limit": 15})
+        results += json.loads(fetch(f"{SEARCH}?{query}")).get("results", [])
     mine = small(cover)
     best = None
+    wanted = editions(album)
     for result in results:
+        if editions(result.get("collectionName")) - wanted:
+            continue
         thumb = result.get("artworkUrl100")
         if not thumb:
             continue

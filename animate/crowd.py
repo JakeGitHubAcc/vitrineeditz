@@ -149,31 +149,37 @@ class Crowd:
         person laid over it where they are in frame `i` of `n`."""
         if not self.people:
             return frame
-        side, pad = self.side, self.reach
         out = frame.copy()
         for p in self.people:
             turn, stretch = self.moved(p, i, n)
-            l, t, r, b = p["box"]
-            x0, y0 = max(0, int(l) - pad), max(0, int(t) - pad)
-            x1, y1 = min(side, int(math.ceil(r)) + pad), min(side, int(math.ceil(b)) + pad)
-            px, py = p["pivot"]
-            # The picture's point for each of the frame's in the region: back through the turn and stretch.
-            rad = math.radians(turn)
-            cos, sin = math.cos(rad), math.sin(rad)
-            # Forward: a point q goes to pivot + R(S(q - pivot)), S stretching up; the inverse maps the frame's
-            # points to the picture's.
-            forward = np.array([[cos, -sin * stretch], [sin, cos * stretch]], np.float64)
-            back = np.linalg.inv(forward)
-            matrix = np.zeros((2, 3), np.float64)
-            matrix[:, :2] = back
-            # In the padded picture's pixels, with the region's corner at 0.
-            origin = np.array([x0, y0], np.float64)
-            pivot = np.array([px, py], np.float64)
-            matrix[:, 2] = pivot + pad - back @ (pivot - origin)
-            size = (x1 - x0, y1 - y0)
-            flags = cv2.INTER_CUBIC | cv2.WARP_INVERSE_MAP
-            colors = cv2.warpAffine(self.padded, matrix, size, flags=flags, borderMode=cv2.BORDER_REPLICATE)
-            alpha = np.clip(cv2.warpAffine(p["outline"], matrix, size, flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP, borderMode=cv2.BORDER_REPLICATE), 0, 1)[..., None]
-            region = out[y0:y1, x0:x1]
-            out[y0:y1, x0:x1] = region * (1 - alpha) + colors * alpha
+            placed(out, self.padded, p["outline"], self.reach, p["box"], turn, stretch, p["pivot"])
         return out
+
+
+def placed(out, padded, outline, pad, box, turn, stretch, pivot, shift=(0.0, 0.0)):
+    """Lays a cut-out over `out` (float RGB, square), in place: the cover's pixels inside `outline` (both
+    padded by `pad`, their edges drawn out), turned by `turn` degrees and stretched up by `stretch` about
+    `pivot`, then moved by `shift`, all in the cover's pixels. Only the region around `box` grown by `pad`
+    is drawn, which the cut-out never moves out of."""
+    side = out.shape[0]
+    l, t, r, b = box
+    x0, y0 = max(0, int(l) - pad), max(0, int(t) - pad)
+    x1, y1 = min(side, int(math.ceil(r)) + pad), min(side, int(math.ceil(b)) + pad)
+    if x1 <= x0 or y1 <= y0:
+        return
+    rad = math.radians(turn)
+    cos, sin = math.cos(rad), math.sin(rad)
+    # Forward: a point q goes to pivot + R(S(q - pivot)) + shift, S stretching up; the inverse maps the
+    # frame's points to the picture's, in the padded picture's pixels with the region's corner at 0.
+    forward = np.array([[cos, -sin * stretch], [sin, cos * stretch]], np.float64)
+    back = np.linalg.inv(forward)
+    matrix = np.zeros((2, 3), np.float64)
+    matrix[:, :2] = back
+    origin = np.array([x0, y0], np.float64)
+    pivot = np.array(pivot, np.float64)
+    matrix[:, 2] = pivot + pad - back @ (pivot + np.array(shift, np.float64) - origin)
+    size = (x1 - x0, y1 - y0)
+    colors = cv2.warpAffine(padded, matrix, size, flags=cv2.INTER_CUBIC | cv2.WARP_INVERSE_MAP, borderMode=cv2.BORDER_REPLICATE)
+    alpha = np.clip(cv2.warpAffine(outline, matrix, size, flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP, borderMode=cv2.BORDER_REPLICATE), 0, 1)[..., None]
+    region = out[y0:y1, x0:x1]
+    out[y0:y1, x0:x1] = region * (1 - alpha) + colors * alpha
