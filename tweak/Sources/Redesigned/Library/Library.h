@@ -11,6 +11,8 @@
 //                       (Redesigned/Navbar/SearchField.x)
 //     LocalAlbumsPage.m Local Albums: the local files as albums, sorted, each with a page of its own, opened
 //                       from a button in the header (Shared/LocalFiles/LocalAlbums.h)
+//     DriveImportPage.m Add from Google Drive, the + of Local Albums: songs from a share link saved as local
+//                       files (Shared/LocalFiles/DriveImport.h)
 //
 // Every hook installs only while Redesigned UI is on (SGRedesignedUI).
 // Threading: main thread only.
@@ -28,3 +30,7 @@ void SGRLibraryClearScrim(UIView *header);
 // pushed from `owner`; and the page of the album a local file's URI belongs to, NO when it is none of them.
 void SGRShowLocalAlbums(UIViewController *owner);
 BOOL SGRShowLocalAlbumOf(UIViewController *owner, NSString *uri);
+
+// DriveImportPage.m. Asks for a Google Drive share link over `owner` and imports what it shares
+// (Shared/LocalFiles/DriveImport.h), showing the import's progress on a page of its own.
+void SGRAskDriveImport(UIViewController *owner);
