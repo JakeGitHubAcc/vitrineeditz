@@ -25,7 +25,7 @@ PERSON_SCORE, CROWD_LEAST, CROWD_TALLEST = 0.5, 3, 0.32
 OUTLINE_LOW, OUTLINE_HIGH, OUTLINE_SOFT = 0.25, 0.6, 0.7
 # How far each sways, in degrees (the least and most, each person picked between), how much they breathe
 # (a stretch up from where they stand, as a share of their height), and how many times over the loop.
-SWAY_LEAST, SWAY_MOST, BREATH, CYCLES = 1.0, 2.2, 0.008, (2, 3)
+SWAY_LEAST, SWAY_MOST, BREATH, CYCLES = 2.0, 3.6, 0.012, (2, 3)
 # How far past each person the cover is painted in, in pixels, for their soft edge and hair.
 BEHIND_GROW = 3
 # What no person who overlaps it this much moves over: a line of text.
@@ -72,6 +72,10 @@ class Crowd:
         self.mask = np.zeros((side, side), np.float32)
         self.plate = cover
         everyone = found(np.clip(cover, 0, 255).astype(np.uint8), path) if path else []
+        # Everyone found, the main person too, for what moves around them to keep off them.
+        self.anyone = np.zeros((side, side), np.float32)
+        for chance, _ in everyone:
+            self.anyone = np.maximum(self.anyone, (chance > 0.5).astype(np.float32))
         small = [i for i, (_, box) in enumerate(everyone) if (box[3] - box[1]) / side <= CROWD_TALLEST]
         if len(small) < CROWD_LEAST:
             return
