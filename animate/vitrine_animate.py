@@ -359,9 +359,12 @@ def work(jobs, comfy, lama, faces, keep_labels, persons=None, scenes=None, finde
             still_sky = np.maximum(still_sky, np.maximum(np.clip(hung * 2, 0, 1), solid))
             steps = effects.lengthened(motion.loop(pictures[1:], [] if wording == "hide" else text, people, still_sky))
             still = np.asarray(shown, dtype=np.float32)
-            # The light leaves text alone, where it is in the frame.
-            text_in_frame = np.zeros((OUT_H, OUT_W), np.float32)
-            text_in_frame[extended.top:extended.top + side] = covered if text else 0
+            # The light leaves text alone, where it is in the frame, and eases off toward it; faces take it
+            # as the rest does. A hard box here showed as a lighter or darker rectangle.
+            boxes = np.zeros((OUT_H, OUT_W), np.float32)
+            for box in words:
+                boxes[extended.top:extended.top + side] = np.maximum(boxes[extended.top:extended.top + side], motion.soft_box(side, box, motion.TEXT_PAD, 0))
+            text_in_frame = effects.unlit(boxes, OUT_W)
             patches = effects.lights((OUT_H, OUT_W))
             n = len(steps)
             clip = []

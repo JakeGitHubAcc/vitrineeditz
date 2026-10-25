@@ -158,8 +158,10 @@ GLINT_BRIGHT, GLINT_LIFT, GLINT_GROUND, GLINT_LEAST, GLINT_SIZE = 235, 110, 100,
 GLINTS, GLINT_APART = 2, 0.12
 GLINT_REACH, GLINT_SECONDS, GLINT_STRENGTH = 0.045, 0.9, 0.9
 # The light: this many soft patches, each this wide as a share of the frame's width, brightening and
-# dimming by up to this much, once round the loop each.
+# dimming by up to this much, once round the loop each. Around the text it fades out over this share of the
+# side, so no edge of where it stops shows.
 LIGHTS, LIGHT_WIDTH, LIGHT_AMOUNT = 3, 0.45, 0.07
+LIGHT_EASE = 0.08
 
 
 def starfield(cover, keep):
@@ -309,6 +311,15 @@ def lights(shape, seed=11):
         patch = np.exp(-(((x - cx) ** 2 + (y - cy) ** 2) / (2 * (LIGHT_WIDTH * w / 2) ** 2)))
         out.append((patch.astype(np.float32), rng.uniform(0, 2 * math.pi)))
     return out
+
+
+def unlit(inside, side):
+    """What the light leaves alone, 0 to 1: `inside` (a hard mask) whole, and from its edge out a fall to
+    nothing over LIGHT_EASE of `side` that starts flat, so neither its edge nor the fall's shows."""
+    if not inside.any():
+        return np.zeros(inside.shape, np.float32)
+    away = cv2.distanceTransform((inside <= 0).astype(np.uint8), cv2.DIST_L2, 5)
+    return np.exp(-(away / (LIGHT_EASE * side / 2)) ** 2).astype(np.float32)
 
 
 def lit(frame, patches, i, n, keep=None):
