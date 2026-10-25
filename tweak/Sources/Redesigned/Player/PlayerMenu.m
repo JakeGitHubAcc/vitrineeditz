@@ -11,6 +11,7 @@
 //                             popover from the ⋯ that asks every source and lists each as it answers
 //     Animated Cover          the playing album's cover animated on the user's computer, and its two settings
 //                             (Shared/AnimatedArtwork/SGCoverAnimator.h)
+//     Go to Album             a local file's album, the page Local Albums has for it (Redesigned/Library/LocalAlbumsPage.m)
 //
 // The item says under its name what is not as Spotify plays it, so the menu reads as a settings summary.
 #import "Core/SGCore.h"
@@ -19,7 +20,10 @@
 #import "Shared/Player/SpeedPitch.h"
 #import "Shared/AnimatedArtwork/AnimatedArtwork.h"
 #import "Shared/AnimatedArtwork/SGCoverAnimator.h"
+#import "Shared/LocalFiles/LocalAlbums.h"
+#import "Shared/LocalFiles/LocalFiles.h"
 #import "Shared/Lyrics/Lyrics.h"
+#import "Redesigned/Library/Library.h"
 #import "Shared/LyricsSources/LyricsSources.h"
 #import "Settings/SGPageStyle.h"
 #import "Player.h"
@@ -226,6 +230,13 @@ static NSArray<UIMenuElement *> *playerItems(void) {
     UIAction *lyrics = lyricsSourceItem();
     if (lyrics) [items addObject:lyrics];
     [items addObjectsFromArray:SGAnimatedCoverMenu(SGLockMotionPlayingPicture(), ^{ SGAnimatedCoverSendPlaying(); })];
+    NSString *playing = SGURIString(SGPlayerState().track.URI);
+    // The albums are scanned on first use, so the item shows from the menu's next opening on.
+    if (SGLocalFileIs(playing) && SGLocalAlbums() && SGLocalAlbumOfTrack(playing)) {
+        [items addObject:[UIAction actionWithTitle:@"Go to Album" image:symbol(@"square.stack") identifier:nil handler:^(UIAction *action) {
+            SGRShowLocalAlbumOf(SGTopController(), playing);
+        }]];
+    }
     return items;
 }
 

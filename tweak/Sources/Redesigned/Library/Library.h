@@ -9,6 +9,8 @@
 //                       circular one left round, and a hairline between the rows
 //     LibrarySearch.x   the search inside the library: its field a glass capsule, the way the Search tab's is
 //                       (Redesigned/Navbar/SearchField.x)
+//     LocalAlbumsPage.m Local Albums: the local files as albums, sorted, each with a page of its own, opened
+//                       from a button in the header (Shared/LocalFiles/LocalAlbums.h)
 //
 // Every hook installs only while Redesigned UI is on (SGRedesignedUI).
 // Threading: main thread only.
@@ -21,3 +23,8 @@ extern NSString *const SGRLibraryListIdentifier;
 // (Kit/SGREdgeEffect.x) is what keeps the header clear of the list under it. A header without one is left
 // alone; the folder's has none.
 void SGRLibraryClearScrim(UIView *header);
+
+// LocalAlbumsPage.m. Local Albums, the local files gathered into albums (Shared/LocalFiles/LocalAlbums.h),
+// pushed from `owner`; and the page of the album a local file's URI belongs to, NO when it is none of them.
+void SGRShowLocalAlbums(UIViewController *owner);
+BOOL SGRShowLocalAlbumOf(UIViewController *owner, NSString *uri);
