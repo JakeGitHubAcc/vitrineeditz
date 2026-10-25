@@ -56,6 +56,10 @@ void SGAnimatedCoverForget(NSString *picture);
 NSString *SGAnimatedCoverStatus(NSString *picture);
 BOOL SGAnimatedCoverPending(NSString *picture);
 NSUInteger SGAnimatedCoverCount(void);
+// Copies every loop the computer keeps that this iPhone lacks (Spotify deleted and installed again), listed under
+// its album where the computer kept the names. Runs on its own a few seconds after launch and once an address is
+// entered; `done` (main) with how many were added, or what went wrong.
+void SGAnimatedCoverRestore(void (^done)(NSUInteger added, NSString *error));
 // The computer's address, or nil when none is entered.
 NSString *SGAnimatedCoverServer(void);
 // An alert asking for the computer's address; `then` runs once one is stored.
