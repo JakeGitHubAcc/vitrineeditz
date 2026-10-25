@@ -1,7 +1,8 @@
 // Library redesign: the header of Your Library and of a folder inside it, the way Home and Search have theirs
 // (Redesigned/Home/HomeHeader.x, Redesigned/Search/SearchPage.x). A large title at the leading edge, the avatar
 // that opens the side drawer at the trailing edge, and the scrim Spotify lays behind the header gone, the soft
-// scroll edge (Kit/SGREdgeEffect.x) being what keeps the header clear of the list scrolling under it.
+// scroll edge (Kit/SGREdgeEffect.x) being what keeps the header clear of the list scrolling under it. Before
+// Spotify's controls, a button of the mod's opens Local Albums (LocalAlbumsPage.m).
 //
 // The filter chips under the row stay Spotify's, untouched. They were taken out when the redesign was first
 // built and the header closed up by the 49pt they left, and sorting a library turned out to be something the
@@ -169,14 +170,47 @@ static void layoutTitle(UIView *header, UIView *spotifyTitle, CGFloat leading, C
     if (!CGRectEqualToRect(title.frame, frame)) title.frame = frame;
 }
 
+#pragma mark - Local Albums
+
+static char kAlbumsKey;
+
+static UIViewController *controllerOf(UIView *view) {
+    for (UIResponder *next = view; next; next = next.nextResponder) {
+        if ([next isKindOfClass:UIViewController.class]) return (UIViewController *)next;
+    }
+    return nil;
+}
+
+// Local Albums (LocalAlbumsPage.m): a glyph button of the mod's just before Spotify's controls, as wide as
+// they are and on their line, a subview of the header the stack does not arrange. Answers where its leading
+// edge fell, for the title to stop short of.
+static CGFloat placeAlbumsButton(UIView *header, UIView *beside, CGFloat leading) {
+    SGRGlyphButton *button = objc_getAssociatedObject(header, &kAlbumsKey);
+    if (!button) {
+        button = [SGRGlyphButton buttonWithSymbol:@"square.stack" pointSize:22 title:@"Local Albums"];
+        __weak UIView *weakHeader = header;
+        button.onTap = ^{
+            UIViewController *owner = controllerOf(weakHeader);
+            if (owner) SGRShowLocalAlbums(owner);
+        };
+        objc_setAssociatedObject(header, &kAlbumsKey, button, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    if (button.superview != header) [header addSubview:button];
+    CGRect row = SGFrameIn(beside, header);
+    CGFloat side = MAX(row.size.height, 44);
+    CGRect frame = CGRectMake(leading - side, round(CGRectGetMidY(row) - side / 2), side, side);
+    if (!CGRectEqualToRect(button.frame, frame)) button.frame = frame;
+    return frame.origin.x;
+}
+
 #pragma mark - the two headers
 
 static BOOL isFace(UIView *view) {
     return SGRIsAvatar(view);
 }
 
-// The root header's controls at its trailing edge, the avatar last, and the title before them. Answers what it
-// placed in the order it reads, nothing while the header has no control laid out.
+// The root header's controls at its trailing edge, the avatar last, Local Albums before them, and the title
+// before that. Answers what it placed in the order it reads, nothing while the header has no control laid out.
 static NSArray<UIView *> *placeRoot(UIView *header) {
     UIView *spotifyTitle = SGRFindByIdentifier(header, @"YourLibraryHeader.title", &kHeaderTitleKey);
     vanish(spotifyTitle);
@@ -191,7 +225,7 @@ static NSArray<UIView *> *placeRoot(UIView *header) {
     if (face) [trailing addObject:face];
     if (!trailing.count) return trailing;
 
-    CGFloat leading = placeTrailing(header, trailing);
+    CGFloat leading = placeAlbumsButton(header, trailing.firstObject, placeTrailing(header, trailing));
     CGRect row = SGFrameIn(trailing.firstObject, header);
     layoutTitle(header, spotifyTitle, SGRSideMargin, leading, CGRectGetMidY(row));
     for (UIView *control in trailing) watchRow(control.superview, header, placeRoot);
