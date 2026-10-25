@@ -27,6 +27,7 @@ Tested on Spotify 9.1.94 under iOS 26, with Redesigned UI on.
   - Open it from **Mod Settings → Add from Google Drive** or the + on Local Albums.
 - **Featured artists credited**: "Song (feat. A & B)" by C shows as "Song" by "C, A, B" in the player, the mini player, the lock screen and Local Albums. The files themselves aren't changed.
 - **Go to Album** in the player's ⋯ menu while a local file plays.
+- **Tap the artist** under a local file in the player for the same sheet a Spotify song gives: each credited artist's real Spotify page (found by name) and the song's local album.
 
 **Fixes for Spotify 9.1.94**
 - The redesigned Library header applies again (it was left as Spotify's).
