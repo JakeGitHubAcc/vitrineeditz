@@ -7,8 +7,8 @@ and artist; this server queues it and makes its loop:
    (catalog.py), else the label painted out (label.py);
 2. what moves: Wan 2.2 TI2V-5B in ComfyUI (workflow.json) animates the cover, and the optical flow of its
    frames, softened, with text and faces held, moves the cover's own pixels (motion.py), so its colors,
-   detail and faces stay its own; the end turns back along the motion to the first frame; a crowd's
-   people are each cut out and sway whole (crowd.py), curtains sway as fabric and solid things (a stage, a
+   detail and faces stay its own; the end turns back along the motion to the first frame; people are
+   each cut out and move whole, a crowd swaying and anyone else only breathing (crowd.py), curtains sway as fabric and solid things (a stage, a
    floor, walls) keep their shape (scene.py);
 3. the lock screen's 3:4 frame around it (frame.py); what the phone's Text and Camera sway settings ask
    for, a starfield's drift, glints on shiny things and a slow shift of the light (effects.py); and a
@@ -103,9 +103,9 @@ class Jobs:
             current = self.state.get(key, {}).get("state")
             if current in ("queued", "running"):
                 return self.status_locked(key)
-            # Sent again (Animate Again on the phone): the old loop goes, and a new one is made.
-            if os.path.exists(self.clip(key)):
-                os.remove(self.clip(key))
+            # Sent again (Animate Again on the phone): a new loop is made, which takes the old one's place
+            # when it is done. The old one is not touched here: another program reading it (Explorer making
+            # its thumbnail) can hold it, and the phone must have its answer meanwhile.
             self.images[key] = (png, names)
             self.queue.append(key)
             self.state[key] = {"state": "queued"}
@@ -117,9 +117,10 @@ class Jobs:
             return self.status_locked(key)
 
     def status_locked(self, key):
-        if os.path.exists(self.clip(key)):
-            return {"state": "done"}
         job = self.state.get(key)
+        # A loop being made again is not done until the new one is, though the old one is still there.
+        if not job and os.path.exists(self.clip(key)):
+            return {"state": "done"}
         if not job:
             return {"state": "unknown"}
         answer = {"state": job["state"]}
@@ -312,7 +313,7 @@ def work(jobs, comfy, lama, faces, keep_labels, persons=None, scenes=None):
                 covered = np.maximum(covered, motion.soft_box(side, box, motion.FACE_PAD, 0))
             stars = effects.starfield(base, covered)
             sky = stars[2] if stars else np.zeros((side, side), np.float32)
-            # A crowd's people move as layers of their own over what is painted in behind them.
+            # People move as layers of their own over what is painted in behind them.
             audience = crowd.Crowd(base, persons, [] if wording == "hide" else text, lama, int(key[:8], 16))
             shiny = effects.glints(base, np.maximum(np.maximum(covered, sky), audience.mask))
             # Curtains sway on their own, around the text and people; solid things keep their shape.
@@ -320,7 +321,7 @@ def work(jobs, comfy, lama, faces, keep_labels, persons=None, scenes=None):
             keep = np.maximum((covered > 0).astype(np.float32), audience.anyone)
             drapes = scene.Curtains(audience.plate, kinds, keep, lama, int(key[8:16], 16))
             base = drapes.plate
-            say(f"{'a starfield' if stars else 'no starfield'}, {len(audience.people)} people in a crowd, "
+            say(f"{'a starfield' if stars else 'no starfield'}, {len(audience.people)} people ({audience.crowd} in a crowd), "
                 f"{'curtains' if drapes.mask.any() else 'no curtains'}, {len(shiny)} glints")
             seed = int(key[:12], 16) % (2 ** 31) + random.randint(0, 999)
             frames = comfy.run(image_name, seed)
@@ -330,8 +331,9 @@ def work(jobs, comfy, lama, faces, keep_labels, persons=None, scenes=None):
             # still toward it rather than at its edge, where a stop pulled the edge out into a streak.
             still_sky = np.asarray(Image.fromarray((sky * 255).astype(np.uint8)).resize((motion.FLOW_SIZE, motion.FLOW_SIZE)), dtype=np.float32) / 255
             still_sky = np.maximum(still_sky, cv2.GaussianBlur(still_sky, (0, 0), SKY_EASE))
-            # Behind the crowd nothing moves but the people laid over it.
-            behind = cv2.resize(audience.mask, (motion.FLOW_SIZE, motion.FLOW_SIZE), interpolation=cv2.INTER_AREA)
+            # Behind people nothing moves but the people laid over it, and the model never moves one, even
+            # one left out of the layers (one over the text).
+            behind = cv2.resize(np.maximum(audience.mask, audience.anyone), (motion.FLOW_SIZE, motion.FLOW_SIZE), interpolation=cv2.INTER_AREA)
             behind = np.maximum(behind, cv2.GaussianBlur(behind, (0, 0), SKY_EASE))
             still_sky = np.maximum(still_sky, np.clip(behind * 2, 0, 1))
             # Nor do the curtains, and the model's motion is held off solid things.
