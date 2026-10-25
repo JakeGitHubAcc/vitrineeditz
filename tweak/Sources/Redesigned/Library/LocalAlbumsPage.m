@@ -8,10 +8,12 @@
 // go on Spotify's own stack.
 //
 // Threading: main thread only.
+#import <AVFoundation/AVFoundation.h>
 #import "Core/SGCore.h"
 #import "Redesigned/Kit/SGRKit.h"
 #import "Settings/SGPage.h"
 #import "Settings/SGPageStyle.h"
+#import "Shared/AnimatedArtwork/SGCoverAnimator.h"
 #import "Shared/LocalFiles/LocalAlbums.h"
 #import "Shared/LocalFiles/LocalFiles.h"
 #import "Shared/Player/PlayerState.h"
@@ -280,11 +282,74 @@ static const CGFloat kTrackRow = 56, kRowMore = 44;
 @interface SGRLocalAlbumHero : UIView
 @property (nonatomic, readonly) UIImageView *picture;
 @property (nonatomic, copy) UIColor *fieldColor;
+// The album's cover animated on the user's computer (Shared/AnimatedArtwork/SGCoverAnimator.h), looping muted over
+// the picture as on Spotify's album page; nil takes it off. The same file again is a no-op.
+- (void)playMotion:(NSURL *)file;
 @end
 
 @implementation SGRLocalAlbumHero {
     CAGradientLayer *_scrim, *_dissolve;
     UIView *_extension;   // iOS 26's UIBackgroundExtensionView around the picture, nil before it
+    NSURL *_motionFile;
+    AVPlayerLayer *_motion;
+    AVQueuePlayer *_player;
+    AVPlayerLooper *_looper;
+}
+
+static void *kMotionReady = &kMotionReady;
+
+- (void)dealloc {
+    [_motion removeObserver:self forKeyPath:@"readyForDisplay" context:kMotionReady];
+}
+
+- (void)playMotion:(NSURL *)file {
+    if (file == _motionFile || [file isEqual:_motionFile]) return;
+    _motionFile = file;
+    [_motion removeObserver:self forKeyPath:@"readyForDisplay" context:kMotionReady];
+    [_motion removeFromSuperlayer];
+    [_player pause];
+    _motion = nil;
+    _player = nil;
+    _looper = nil;
+    if (!file) return;
+    _player = [AVQueuePlayer new];
+    _player.muted = YES;
+    _player.preventsDisplaySleepDuringVideoPlayback = NO;
+    _player.automaticallyWaitsToMinimizeStalling = NO;
+    _looper = [AVPlayerLooper playerLooperWithPlayer:_player templateItem:[AVPlayerItem playerItemWithURL:file]];
+    _motion = [AVPlayerLayer playerLayerWithPlayer:_player];
+    _motion.videoGravity = AVLayerVideoGravityResizeAspectFill;
+    // Over the picture, under the scrim and the dissolve, and in only once it has a frame to show.
+    _motion.zPosition = 0.5;
+    _motion.opacity = 0;
+    _motion.frame = self.bounds;
+    [self.layer addSublayer:_motion];
+    [_motion addObserver:self forKeyPath:@"readyForDisplay" options:NSKeyValueObservingOptionInitial context:kMotionReady];
+    if (self.window) [_player play];
+}
+
+- (void)observeValueForKeyPath:(NSString *)keyPath ofObject:(id)object change:(NSDictionary *)change context:(void *)context {
+    if (context != kMotionReady) {
+        [super observeValueForKeyPath:keyPath ofObject:object change:change context:context];
+        return;
+    }
+    dispatch_async(dispatch_get_main_queue(), ^{
+        AVPlayerLayer *layer = self->_motion;
+        if (layer != object || !layer.readyForDisplay || layer.opacity == 1) return;
+        CABasicAnimation *fade = [CABasicAnimation animationWithKeyPath:@"opacity"];
+        fade.fromValue = @0;
+        fade.toValue = @1;
+        fade.duration = 0.2;
+        layer.opacity = 1;
+        [layer addAnimation:fade forKey:@"fade"];
+    });
+}
+
+// Off screen it stops: a page left on the navigation stack would otherwise keep decoding.
+- (void)didMoveToWindow {
+    [super didMoveToWindow];
+    if (self.window) [_player play];
+    else [_player pause];
 }
 
 - (instancetype)initWithFrame:(CGRect)frame {
@@ -337,6 +402,7 @@ static const CGFloat kTrackRow = 56, kRowMore = 44;
         _extension.frame = bounds;
         _picture.frame = CGRectMake(0, 0, bounds.size.width, MIN(bounds.size.width, bounds.size.height));
     }
+    _motion.frame = bounds;
     _scrim.frame = CGRectMake(0, 0, bounds.size.width, MIN(kTopScrim, bounds.size.height));
     CGFloat fade = round(bounds.size.height * kDissolve);
     _dissolve.frame = CGRectMake(0, bounds.size.height - fade, bounds.size.width, fade);
@@ -453,6 +519,7 @@ static UIControl *rowSource(NSString *symbol, NSString *word, void (^tapped)(voi
 
     [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(albumsChanged) name:SGLocalAlbumsDidChangeNotification object:nil];
     [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(fieldColorChanged:) name:SGRFieldColorDidChangeNotification object:_field];
+    [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(showMotion) name:SGAnimatedCoverSavedNotification object:nil];
     SGAddPlayerStateObserver(self);
     _playing = SGURIString(SGPlayerState().track.URI);
     [self showAlbum];
@@ -487,6 +554,17 @@ static UIControl *rowSource(NSString *symbol, NSString *word, void (^tapped)(voi
     _laidOutWidth = 0;
     [self.view setNeedsLayout];
     [self.tableView reloadData];
+    [self showMotion];
+}
+
+// The album's animated cover, made on the user's computer from any of its songs: they share one, kept under the
+// album (SGAnimatedCoverPicture), or listed under its artist and name when made before they did.
+- (void)showMotion {
+    SGLocalTrack *track = _album.tracks.firstObject;
+    if (!track) return;
+    NSDictionary *info = SGLocalFileInfo(track.uri);
+    NSURL *file = SGAnimatedCoverFile(SGAnimatedCoverPicture(track.uri, nil)) ?: SGAnimatedCoverFileForAlbum(info[@"artist"], info[@"album"]);
+    [_hero playMotion:file];
 }
 
 // The hero reaches to the top of the title plus SGRHeaderInfoTitleRise, so the title and the artist sit on the

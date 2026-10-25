@@ -29,8 +29,8 @@ AMOUNT, BILLOW, THIN = 0.3, 0.9, 0.5
 # The billows' size (a share of the side) and each layer's drift, in shares of the side a second.
 SIZE = 0.16
 DRIFTS = ((0.022, -0.004), (-0.014, 0.005))
-# How far around faces and text it eases off, as a share of the side.
-KEEP_EASE = 0.03
+# How far around faces and text it eases off, and in from the cover's top and bottom, as shares of the side.
+KEEP_EASE, EDGE_FADE = 0.03, 0.1
 
 
 def tiling_noise(side, size, rng):
@@ -80,6 +80,11 @@ class Fog:
         haze = ((hsv[..., 1] <= HAZE_SATURATION) & (hsv[..., 2] >= HAZE_LEAST) & (deviation <= HAZE_SMOOTH)).astype(np.float32)
         haze = np.clip(gaussian_filter(haze * where, HAZE_SOFT * side) * 1.5, 0, 1)
         haze *= 1 - np.clip(gaussian_filter(keep.astype(np.float32), KEEP_EASE * side) * 2, 0, 1)
+        # None at the cover's top and bottom, where the still blur drawn out from them meets it: smoke up to the
+        # edge made a line there.
+        y = np.arange(side, dtype=np.float32)
+        ramp = np.clip(np.minimum(y, side - 1 - y) / (EDGE_FADE * side), 0, 1)
+        haze *= (ramp * ramp * (3 - 2 * ramp))[:, None]
         if haze.mean() < HAZE_LEAST_SHARE:
             return
         self.mask = haze

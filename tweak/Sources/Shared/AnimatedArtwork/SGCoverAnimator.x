@@ -7,6 +7,7 @@
 #import <UIKit/UIKit.h>
 #import "Core/SGCore.h"
 #import "Settings/SGPageStyle.h"
+#import "Shared/LocalFiles/LocalFiles.h"
 #import "SGCoverAnimator.h"
 
 NSNotificationName const SGAnimatedCoverSavedNotification = @"SGAnimatedCoverSavedNotification";
@@ -43,6 +44,13 @@ static NSURL *frameFor(NSString *key) { return [folder(@"sent") URLByAppendingPa
 static NSURL *namesFor(NSString *key) { return [folder(@"sent") URLByAppendingPathComponent:[key stringByAppendingPathExtension:@"plist"]]; }
 
 NSString *SGAnimatedCoverPicture(NSString *uri, NSDictionary *metadata) {
+    // A local file's picture is its own file, so each song of a local album had a cover of its own: they share
+    // their album's instead, by its artist (the file's own, before a title's guests) and name.
+    if (SGLocalFileIs(uri)) {
+        NSDictionary *info = SGLocalFileInfo(uri);
+        NSString *album = SGAnimatedCoverAlbumPicture(info[@"artist"], info[@"album"]);
+        if (album) return album;
+    }
     for (NSString *field in @[@"image_xlarge_url", @"image_large_url", @"image_url"]) {
         id value = [metadata isKindOfClass:NSDictionary.class] ? metadata[field] : nil;
         if ([value isKindOfClass:NSString.class] && [value length]) return value;
