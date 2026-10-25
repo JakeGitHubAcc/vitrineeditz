@@ -18,6 +18,7 @@ typedef NS_ENUM(NSInteger, SGAnimateText) {
     SGAnimateTextKeep = 0,   // the text stays, still
     SGAnimateTextFade,       // the text fades out and back in over each loop
     SGAnimateTextHide,       // the text is painted out
+    SGAnimateTextSpray,      // the text is sprayed off along its diagonal and back on, a spray paint edge
 };
 
 // Posted once a cover's loop is saved; the object is its key (SGAnimatedCoverKey).

@@ -17,18 +17,22 @@ import crowd
 import label
 
 # What is looked for, and how each moves: "fly" hovers and turns a little, "drift" slides to and fro,
-# "nod" turns on its stem, "bend" sways from where it stands.
+# "nod" turns on its stem, "bend" sways from where it stands, "float" bobs up and down with a wobble, as a bubble
+# in water does (Incubus' Make Yourself).
 KINDS = {
     "bee": "fly", "butterfly": "fly", "bird": "fly", "insect": "fly", "dragonfly": "fly", "moth": "fly",
     "balloon": "fly", "feather": "fly",
     "cloud": "drift",
+    "bubble": "float", "soap bubble": "float", "air bubble": "float",
     "flower": "nod", "sunflower": "nod", "rose": "nod", "tulip": "nod", "daisy": "nod",
     "tree": "bend", "palm tree": "bend", "bush": "bend", "grass": "bend",
 }
 # Back to front: what drifts is far, what flies is near. People go between "bend" and "nod".
-DEPTH = {"drift": 0, "bend": 1, "nod": 2, "fly": 3}
+DEPTH = {"drift": 0, "bend": 1, "nod": 2, "fly": 3, "float": 3}
 # The finder's least scores, and when two finds are one (the share of the smaller box the other covers).
 SCORE, WORD_SCORE, SAME = 0.3, 0.25, 0.7
+# The least score for what floats: the finder is less sure of a bubble (0.15 to 0.2 on Make Yourself's) than of a bee.
+FLOAT_SCORE = 0.15
 # A find that holds this many others is a group of them (a field of flowers), not one thing; and the most
 # of the cover one thing may be, and one that bends.
 GROUP, LARGEST, LARGEST_BEND = 3, 0.3, 0.6
@@ -38,6 +42,8 @@ OVER_PERSON, OVER_TEXT = 0.25, 0.05
 FLY_SHIFT, FLY_LIFT, FLY_TURN, FLY_CYCLES = 0.012, 0.009, 5.0, (2, 3)
 DRIFT_SHIFT, DRIFT_CYCLES = 0.015, (1,)
 NOD_TURN, NOD_STEM, NOD_CYCLES = 4.0, 0.6, (2, 3)
+# A bubble's rise and fall and its wobble sideways (shares of the side), and how much it swells and narrows.
+FLOAT_RISE, FLOAT_WOBBLE, FLOAT_SWELL, FLOAT_CYCLES = 0.012, 0.005, 0.03, (2, 3)
 # How far past each thing the cover is painted in, in pixels, and its outline's soft edge.
 BEHIND_GROW, OUTLINE_SOFT = 3, 0.8
 
@@ -121,9 +127,9 @@ def found(cover, path):
     """The things in `cover` (RGB uint8, square) that move: (kind, mask, box in pixels)."""
     side = cover.shape[0]
     finds = []
-    for box, name, score in named(cover, path, KINDS):
+    for box, name, score in named(cover, path, KINDS, min(SCORE, FLOAT_SCORE)):
         kind = kind_of(str(name))
-        if not kind:
+        if not kind or score < (FLOAT_SCORE if kind == "float" else SCORE):
             continue
         area = (box[2] - box[0]) * (box[3] - box[1]) / side ** 2
         if area > (LARGEST_BEND if kind == "bend" else LARGEST):
@@ -187,7 +193,7 @@ class Props:
             l, t, r, b = box
             w, h = r - l, b - t
             pivot = ((l + r) / 2, (t + b) / 2) if kind != "nod" else ((l + r) / 2, b + NOD_STEM * h)
-            cycles = {"fly": FLY_CYCLES, "drift": DRIFT_CYCLES, "nod": NOD_CYCLES}[kind]
+            cycles = {"fly": FLY_CYCLES, "drift": DRIFT_CYCLES, "nod": NOD_CYCLES, "float": FLOAT_CYCLES}[kind]
             self.things.append({
                 "kind": kind, "outline": outline, "box": (l, t, r, b), "pivot": pivot,
                 "cycles": int(rng.choice(cycles)), "phases": rng.uniform(0, 2 * math.pi, 4),
@@ -210,6 +216,8 @@ class Props:
                 return 2 * (FLY_SHIFT + FLY_LIFT) * side + 2 * math.radians(FLY_TURN) * max(w, h)
             if p["kind"] == "drift":
                 return 2 * DRIFT_SHIFT * side
+            if p["kind"] == "float":
+                return 2 * (FLOAT_RISE + FLOAT_WOBBLE) * side + FLOAT_SWELL * max(w, h)
             return 2 * math.radians(NOD_TURN) * (1 + NOD_STEM) * max(w, h) * 1.5
         self.reach = int(math.ceil(max(reach(p) for p in self.things))) + 4
         pad = self.reach
@@ -218,7 +226,7 @@ class Props:
             p["outline"] = cv2.copyMakeBorder(p["outline"], pad, pad, pad, pad, cv2.BORDER_REPLICATE)
 
     def moved(self, p, i, n):
-        """Thing `p`'s turn (degrees) and shift (pixels) in frame `i` of `n`: none in the first and last."""
+        """Thing `p`'s turn (degrees), shift (pixels) and stretch in frame `i` of `n`: none in the first and last."""
         t = i / max(n - 1, 1)
         c, (a, b, d, e), (sa, sb, sc) = p["cycles"], p["phases"], p["sign"]
         def wave(cycles, phase):
@@ -229,6 +237,10 @@ class Props:
                     (sa * FLY_SHIFT * side * wave(c, a) / 2, sb * FLY_LIFT * side * wave(c + 1, b) / 2))
         if p["kind"] == "drift":
             return 0.0, (sa * DRIFT_SHIFT * side * wave(c, a) / 2, 0.0)
+        if p["kind"] == "float":
+            # Always up from where it is and back, smoothly: a bubble rises.
+            rise = (1 - math.cos(2 * math.pi * c * t)) / 2
+            return 0.0, (FLOAT_WOBBLE * side * wave(c + 1, b) / 2, -FLOAT_RISE * side * rise)
         return sa * NOD_TURN * (0.75 * wave(c, a) + 0.25 * wave(c + 1, b)) / 2, (0.0, 0.0)
 
     def over(self, frame, i, n, front):
@@ -239,7 +251,10 @@ class Props:
             if (DEPTH[p["kind"]] >= DEPTH["nod"]) != front:
                 continue
             turn, shift = self.moved(p, i, n)
+            # A bubble swells and narrows a little as it bobs.
+            t = i / max(n - 1, 1)
+            stretch = 1 + FLOAT_SWELL * math.sin(2 * math.pi * p["cycles"] * t) if p["kind"] == "float" else 1.0
             if out is frame:
                 out = frame.copy()
-            crowd.placed(out, self.padded, p["outline"], self.reach, p["box"], turn, 1.0, p["pivot"], shift)
+            crowd.placed(out, self.padded, p["outline"], self.reach, p["box"], turn, stretch, p["pivot"], shift)
         return out

@@ -27,6 +27,10 @@ SHADOW_REACH, SHADOW_DARKER = 0.2, 8
 # The fade: the text shows for this share of the loop at its start, fades out over FADE seconds, stays
 # away, and fades back in to show again for this share at the end. The first frame, the poster, has it.
 SHOWN_FIRST, SHOWN_LAST, FADE = 0.3, 0.12, 1.2
+# Sprayed text: how wide the edge between shown and not is (a share of the way along the text), how much the
+# edge wavers and how much it is speckled (shares of the order the text goes in), the waver's size as a share of
+# the side and the speckle's dots in pixels.
+SPRAY_EDGE, SPRAY_ROUGH, SPRAY_SPECKLE, SPRAY_WAVER, SPRAY_DOT = 0.14, 0.12, 0.16, 0.03, 0.7
 # The sway: the drift sideways and up and down and the push in, as shares of the frame's width, and the
 # tilt in degrees. The frame is always enlarged by at least ZOOM_LEAST, so its edges never show.
 DRIFT_X, DRIFT_Y, PUSH, TILT, ZOOM_LEAST = 0.005, 0.003, 0.012, 0.25, 1.025
@@ -119,9 +123,36 @@ def shown_text(i, n):
 
 
 def faded(cover, text, mask, amount):
-    """The frame's cover with the still text over it at `amount`, inside `mask`."""
+    """The frame's cover with the still text over it at `amount` (a number, or one per pixel), inside `mask`."""
     a = (mask * amount)[..., None]
     return cover * (1 - a) + text * a
+
+
+class Spray:
+    """The text sprayed on and off rather than faded, as some animated covers do: it goes from the end of its
+    diagonal back to the start and comes again from the start, the edge between what shows and what does not the
+    speckle of spray paint. `mask` is where the text is (plate()'s), `seed` picks the speckle."""
+
+    def __init__(self, mask, seed):
+        side = mask.shape[0]
+        rng = np.random.default_rng(seed)
+        y, x = np.mgrid[0:side, 0:side].astype(np.float32)
+        ys, xs = np.nonzero(mask > 0.05)
+        if not len(xs):
+            ys, xs = np.array([0, side - 1]), np.array([0, side - 1])
+        x0, x1, y0, y1 = xs.min(), xs.max() + 1, ys.min(), ys.max() + 1
+        # Along the text's own diagonal, top left first, wavering a little and speckled at the finest scale.
+        diagonal = np.clip(((x - x0) / max(x1 - x0, 1) + (y - y0) / max(y1 - y0, 1)) / 2, 0, 1)
+        waver = gaussian_filter(rng.standard_normal((side, side)).astype(np.float32), SPRAY_WAVER * side)
+        speckle = gaussian_filter(rng.random((side, side)).astype(np.float32), SPRAY_DOT)
+        def spread(field):
+            return (field - field.min()) / max(float(field.max() - field.min()), 1e-6)
+        order = (1 - SPRAY_ROUGH - SPRAY_SPECKLE) * diagonal + SPRAY_ROUGH * spread(waver) + SPRAY_SPECKLE * spread(speckle)
+        self.order = spread(order).astype(np.float32)
+
+    def amount(self, shown):
+        """How much of the text shows at each pixel when `shown` (shown_text()'s) of it does."""
+        return np.clip((shown * (1 + SPRAY_EDGE) - self.order) / SPRAY_EDGE, 0, 1)
 
 
 def swayed(frame, i, n):
