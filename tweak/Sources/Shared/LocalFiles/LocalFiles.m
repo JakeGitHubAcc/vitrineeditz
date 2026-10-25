@@ -88,6 +88,88 @@ NSDictionary<NSString *, id> *SGLocalFileInfo(NSString *uri) {
     return info;
 }
 
+#pragma mark - the guests a title names
+
+static NSString *trimmed(NSString *text) {
+    NSArray<NSString *> *words = [text componentsSeparatedByCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    return [[words filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"length > 0"]] componentsJoinedByString:@" "];
+}
+
+BOOL SGLocalFileSplitCredits(NSString *title, NSString *artist, NSString **bareTitle, NSString **creditedArtist) {
+    if (!title.length) return NO;
+    static NSRegularExpression *bracketed, *trailing, *between;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        NSString *marker = @"(?:feat\\.?|ft\\.?|featuring)\\s+";
+        // Anywhere in the title, so "(feat. A) [Remix]" keeps its remix; a bare marker only at the end, with its dot
+        // or as featuring, so a title with "ft" in a word of its own is left alone.
+        bracketed = [NSRegularExpression regularExpressionWithPattern:[NSString stringWithFormat:@"\\s*(?:\\(\\s*%@([^()]+?)\\s*\\)|\\[\\s*%@([^\\[\\]]+?)\\s*\\])", marker, marker]
+                                                              options:NSRegularExpressionCaseInsensitive error:NULL];
+        trailing = [NSRegularExpression regularExpressionWithPattern:@"\\s+(?:feat\\.|ft\\.|featuring)\\s+(.+?)\\s*$"
+                                                             options:NSRegularExpressionCaseInsensitive error:NULL];
+        // Guests are listed with commas and "&"; "and" and " x " stay, being parts of names as often as not.
+        between = [NSRegularExpression regularExpressionWithPattern:@"\\s*(?:,|&)\\s*" options:0 error:NULL];
+    });
+    NSRange whole = NSMakeRange(0, title.length);
+    NSTextCheckingResult *match = [bracketed firstMatchInString:title options:0 range:whole] ?: [trailing firstMatchInString:title options:0 range:whole];
+    if (!match) return NO;
+    NSString *guests = nil;
+    for (NSUInteger i = 1; i < match.numberOfRanges && !guests; i++) {
+        NSRange range = [match rangeAtIndex:i];
+        if (range.location != NSNotFound) guests = [title substringWithRange:range];
+    }
+    NSString *bare = trimmed([title stringByReplacingCharactersInRange:match.range withString:@" "]);
+    if (!guests.length || !bare.length) return NO;
+
+    NSMutableArray<NSString *> *names = [NSMutableArray array];
+    NSMutableSet<NSString *> *named = [NSMutableSet set];
+    NSString *lead = trimmed(artist ?: @"");
+    // A guest the artist line already names is not named twice.
+    NSString *leads = [between stringByReplacingMatchesInString:lead options:0 range:NSMakeRange(0, lead.length) withTemplate:@"\n"];
+    for (NSString *name in [leads componentsSeparatedByString:@"\n"]) {
+        NSString *key = trimmed(name).lowercaseString.precomposedStringWithCanonicalMapping;
+        if (key.length) [named addObject:key];
+    }
+    if (lead.length) [names addObject:lead];
+    NSString *list = [between stringByReplacingMatchesInString:guests options:0 range:NSMakeRange(0, guests.length) withTemplate:@"\n"];
+    for (NSString *guest in [list componentsSeparatedByString:@"\n"]) {
+        NSString *name = trimmed(guest), *key = name.lowercaseString.precomposedStringWithCanonicalMapping;
+        if (!name.length || [named containsObject:key]) continue;
+        [named addObject:key];
+        [names addObject:name];
+    }
+    if (bareTitle) *bareTitle = bare;
+    if (creditedArtist) *creditedArtist = [names componentsJoinedByString:@", "];
+    return YES;
+}
+
+// Asked for every row many times a second, so each URI is split once; an edit empties it.
+static NSCache *shownCache(void) {
+    static NSCache *cache;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ cache = [NSCache new]; });
+    return cache;
+}
+
+NSDictionary<NSString *, id> *SGLocalFileShown(NSString *uri) {
+    if (!SGLocalFileIs(uri)) return nil;
+    id cached = [shownCache() objectForKey:uri];
+    if (cached) return cached;
+    NSDictionary *info = SGLocalFileInfo(uri);
+    if (!info) return nil;
+    NSString *title = nil, *artist = nil;
+    NSDictionary *shown = info;
+    if (SGLocalFileSplitCredits(info[@"title"], info[@"artist"], &title, &artist)) {
+        NSMutableDictionary *credited = [info mutableCopy];
+        credited[@"title"] = title;
+        if (artist.length) credited[@"artist"] = artist;
+        credited[@"credited"] = @YES;
+        shown = credited;
+    }
+    [shownCache() setObject:shown forKey:uri];
+    return shown;
+}
+
 #pragma mark - storing an edit
 
 NSString *SGLocalFileCoversDirectory(void) {
@@ -151,6 +233,7 @@ static NSString *writeCover(UIImage *image) {
 }
 
 static void changed(NSString *uri) {
+    [shownCache() removeAllObjects];
     [NSNotificationCenter.defaultCenter postNotificationName:SGLocalFileEditsDidChangeNotification object:uri];
 }
 

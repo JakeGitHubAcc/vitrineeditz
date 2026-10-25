@@ -32,6 +32,8 @@ NSNotificationName const SGLocalAlbumsDidChangeNotification = @"spotifyglass.loc
 
 @interface SGLocalTrack ()
 @property (nonatomic, copy, readwrite) NSString *uri, *path, *title, *artist, *album;
+// The artist before the title's guests were added to it, which is whose album it is.
+@property (nonatomic, copy) NSString *lead;
 @property (nonatomic, readwrite) NSInteger number, disc, year, seconds;
 @property (nonatomic, strong, readwrite) NSDate *added;
 @end
@@ -242,9 +244,11 @@ static NSArray<SGLocalAlbum *> *scan(NSDictionary<NSString *, NSString *> *seen)
         SGLocalTrack *track = [SGLocalTrack new];
         track.uri = uriFor(tags, seen);
         track.path = path;
-        NSDictionary *info = SGLocalFileInfo(track.uri);
-        track.title = info[@"title"] ?: tags.title;
-        track.artist = info[@"artist"] ?: tags.artist ?: @"";
+        // Shown as the player shows it, the title's guests credited as artists (LocalFiles.h).
+        NSDictionary *info = SGLocalFileInfo(track.uri), *shown = SGLocalFileShown(track.uri);
+        track.title = shown[@"title"] ?: tags.title;
+        track.artist = shown[@"artist"] ?: tags.artist ?: @"";
+        track.lead = info[@"artist"] ?: tags.artist ?: @"";
         track.album = info[@"album"] ?: tags.album ?: @"";
         track.number = tags.number;
         track.year = tags.year;
@@ -278,13 +282,13 @@ static NSArray<SGLocalAlbum *> *scan(NSDictionary<NSString *, NSString *> *seen)
         NSInteger seconds = 0, year = 0;
         NSDate *added = NSDate.distantPast;
         for (SGLocalTrack *track in tracks) {
-            if (track.artist.length) [artists addObject:folded(track.artist)];
+            if (track.lead.length) [artists addObject:folded(track.lead)];
             seconds += track.seconds;
             year = MAX(year, track.year);
             added = [added laterDate:track.added];
         }
         NSString *first = nil;
-        for (SGLocalTrack *track in tracks) if (track.artist.length) { first = track.artist; break; }
+        for (SGLocalTrack *track in tracks) if (track.lead.length) { first = track.lead; break; }
         album.artist = artists.count > 1 ? @"Various Artists" : first ?: @"Unknown Artist";
         album.seconds = seconds;
         album.year = year;
@@ -365,7 +369,7 @@ SGLocalAlbum *SGLocalAlbumOfTrack(NSString *uri) {
     SGLocalAlbum *album = sg_albumOfURI[uri];
     if (album) return album;
     // A track played under another URI than the one made for it: found by its names.
-    NSDictionary *info = SGLocalFileInfo(uri);
+    NSDictionary *info = SGLocalFileShown(uri);
     NSString *title = folded(info[@"title"] ?: @""), *albumName = folded(info[@"album"] ?: @"");
     for (SGLocalAlbum *candidate in sg_albums) {
         if (![folded(candidate.title) isEqualToString:albumName]) continue;

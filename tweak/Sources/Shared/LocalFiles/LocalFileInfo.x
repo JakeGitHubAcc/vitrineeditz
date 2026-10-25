@@ -21,12 +21,13 @@
 #import "LocalFiles.h"
 
 // Called for every track in every list many times a second: one prefix check for any other track.
+// The names are SGLocalFileShown's, so the guests a title names are credited as artists, edited or not.
 static NSDictionary *withEdit(NSDictionary *metadata, NSString *uri) {
-    NSDictionary *edit = SGLocalFileEditFor(uri);
-    if (!edit) return metadata;
+    NSDictionary *edit = SGLocalFileEditFor(uri), *shown = SGLocalFileShown(uri);
+    if (!edit && ![shown[@"credited"] boolValue]) return metadata;
     NSMutableDictionary *edited = metadata ? [metadata mutableCopy] : [NSMutableDictionary dictionary];
-    if ([edit[@"title"] length]) edited[@"title"] = edit[@"title"];
-    if ([edit[@"artist"] length]) edited[@"artist_name"] = edit[@"artist"];
+    if ([shown[@"title"] length]) edited[@"title"] = shown[@"title"];
+    if ([shown[@"artist"] length]) edited[@"artist_name"] = shown[@"artist"];
     if ([edit[@"album"] length]) edited[@"album_title"] = edit[@"album"];
     NSString *cover = SGLocalFileCoverURL(SGLocalFileCoverPath(edit));
     // Every size, since a reader may take any of them: Spotify's loader, and the redesign's artwork bridge
@@ -60,7 +61,7 @@ static NSDictionary *withEdit(NSDictionary *metadata, NSString *uri) {
     MPMediaItemArtwork *artwork = [[MPMediaItemArtwork alloc] initWithBoundsSize:cover.size requestHandler:^UIImage *(CGSize size) {
         return cover;
     }];
-    SGNowPlayingSetExtras(@"localFiles", @{MPMediaItemPropertyArtwork: artwork}, SGLocalFileInfo(uri)[@"title"]);
+    SGNowPlayingSetExtras(@"localFiles", @{MPMediaItemPropertyArtwork: artwork}, SGLocalFileShown(uri)[@"title"]);
     SGNowPlayingSetExtras(@"localFiles.tags", @{MPMediaItemPropertyArtwork: artwork}, SGLocalFileTags(uri)[@"title"]);
 }
 

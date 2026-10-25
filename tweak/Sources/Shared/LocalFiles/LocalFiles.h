@@ -34,6 +34,14 @@ NSString *SGLocalFileLyricsKey(NSString *uri);
 NSDictionary<NSString *, id> *SGLocalFileInfo(NSString *uri);
 // The file's own names, as its URI carries them, with no edit over them.
 NSDictionary<NSString *, id> *SGLocalFileTags(NSString *uri);
+// The names it is shown under, as Spotify credits its own tracks: SGLocalFileInfo's, with the guests the title
+// names after "feat.", "ft." or "featuring" taken out of it and added to the artist ("Song (feat. A & B)" by C
+// is "Song" by "C, A, B"), and "credited" YES when it did. For the player and the lists; the editor and the
+// lyrics keep SGLocalFileInfo's.
+// Safe from any thread; nil for anything but a local file.
+NSDictionary<NSString *, id> *SGLocalFileShown(NSString *uri);
+// That split on any title and artist: NO, and nothing written, when the title names no guests.
+BOOL SGLocalFileSplitCredits(NSString *title, NSString *artist, NSString **bareTitle, NSString **creditedArtist);
 
 // The user's edit of a local file, nil when there is none. Safe from any thread.
 NSDictionary<NSString *, id> *SGLocalFileEditFor(NSString *uri);
