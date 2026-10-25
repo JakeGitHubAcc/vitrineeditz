@@ -78,7 +78,10 @@ static void show(NSURL *file) {
     NSUInteger walk = sg_walk;
     NSString *title = sg_title;
     SGMotionPoster(file, ^(UIImage *poster) {
-        if (!poster || poster.size.height <= 0 || walk != sg_walk) return;
+        if (!poster || poster.size.height <= 0 || walk != sg_walk) {
+            SGLog(@"lock motion: %@ not shown (%@)", file.lastPathComponent, walk != sg_walk ? @"another track's walk began" : @"no first frame read");
+            return;
+        }
         CGFloat ratio;
         NSString *key = keyFor(poster.size, &ratio);
         if (!key) {
