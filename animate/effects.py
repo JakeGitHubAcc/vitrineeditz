@@ -24,6 +24,12 @@ ERASE_PAD, LETTER_CONTRAST, GLYPH_GROW, FADE_EDGE = 0.08, 60, 3, 2
 # In a loose box, a part filling more than this share of its own bounds, and bigger than this share of the box, is a
 # block (a window in a wall) rather than a letter.
 LETTER_SOLID, LETTER_BLOCK = 0.8, 0.01
+# A part this many times longer than it is wide, and sparse, is a streak or the wall's grain rather than a letter.
+LETTER_LONG = 6
+# The least a letter's part is, as a share of its box's height squared, below which it is a speck of grain.
+LETTER_SPECK = 0.035
+# How far apart a letter's pieces may be and still be joined, in pixels.
+LETTER_JOIN = 7
 # A drop shadow or dark outline: as far from the letters as it is looked for, as a share of the line's
 # height, and how much darker than what is behind it a pixel must be to be one, out of 255.
 SHADOW_REACH, SHADOW_DARKER = 0.2, 8
@@ -45,32 +51,57 @@ BOIL_EDGE_LOW, BOIL_EDGE_HIGH, BOIL_NEAR, BOIL_BAND = 60, 160, 0.006, 2
 DRIFT_X, DRIFT_Y, PUSH, TILT, ZOOM_LEAST = 0.005, 0.003, 0.012, 0.25, 1.025
 
 
-def letters(patch):
-    """Which pixels of a line's box (gray, uint8) are its letters: the box split into its light and dark
-    shades, the letters being the shade that touches the box's edge less, as the background runs out past
-    it. None when the two shades are too alike to tell apart."""
-    split, light = cv2.threshold(patch, 0, 1, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+def split(patch):
+    """A box (one channel, uint8) split into its two shades: (the letters, how well they stand apart, 0 to 1), the
+    letters being the shade that touches the box's edge less, as the background runs out past it; None when the
+    two are too alike to tell apart. How well they stand apart weighs the shades' difference by how little of the
+    box's edge the letters touch, so a grain or a pattern running through the box scores low."""
+    _, light = cv2.threshold(patch, 0, 1, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     light = light.astype(bool)
     if not light.any() or light.all():
         return None
-    if abs(float(patch[light].mean()) - float(patch[~light].mean())) < LETTER_CONTRAST:
+    difference = abs(float(patch[light].mean()) - float(patch[~light].mean()))
+    if difference < LETTER_CONTRAST:
         return None
     edge = np.concatenate([light[0], light[-1], light[:, 0], light[:, -1]])
-    return ~light if edge.mean() > 0.5 else light
+    found = ~light if edge.mean() > 0.5 else light
+    border = np.concatenate([found[0], found[-1], found[:, 0], found[:, -1]]).mean()
+    return found, difference / 255 * (1 - border)
 
 
-def lettered(found):
-    """Of what letters() found in a loose box (the finder's, not a line the reader read), only what looks like
-    letters: no part touching the box's edge (an arm reaching in, To the Stars) and no part that fills its own
-    bounds nearly whole (a window set in the wall); nothing at all when letters() found none."""
-    count, parts, stats, _ = cv2.connectedComponentsWithStats(found.astype(np.uint8))
+def letters(patch, color=None):
+    """Which pixels of a line's box are its letters, by brightness (`patch`, gray uint8) or, where it tells them
+    apart better, by how strong their color is (`color`, the box in RGB): rust letters on gray wood are as dark
+    as the wood's grain, which the brightness alone took for letters too (To the Stars). None when neither tells
+    them from their background."""
+    best = split(patch)
+    if color is not None:
+        strength = cv2.cvtColor(color, cv2.COLOR_RGB2HSV)[..., 1]
+        by_color = split(strength)
+        if by_color and (not best or by_color[1] > best[1]):
+            best = by_color
+    return best[0] if best else None
+
+
+def lettered(found, loose_box=False):
+    """Of what letters() found in a box, only what looks like letters: no long thin streak (the wall's grain), no
+    part that fills its own bounds nearly whole (a window set in the wall), and in a loose box (`loose_box`, the
+    finder's rather than a line the reader read) nothing touching the box's edge (an arm reaching in, To the Stars)."""
+    # Painted letters on a grained wall come apart along the grain: their pieces are joined first, so a letter is
+    # judged whole and the specks between them stay small.
+    found = cv2.morphologyEx(found.astype(np.uint8), cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (LETTER_JOIN, LETTER_JOIN)))
+    count, parts, stats, _ = cv2.connectedComponentsWithStats(found)
     h, w = found.shape
     keep = np.zeros(count, bool)
+    # A speck of grain is far smaller than a letter of the line: a part must be some of the line's height across.
+    least = max(4.0, (LETTER_SPECK * h) ** 2)
     for k in range(1, count):
         x, y, bw, bh, area = stats[k]
-        touches = x == 0 or y == 0 or x + bw >= w or y + bh >= h
+        touches = (x == 0 or y == 0 or x + bw >= w or y + bh >= h) and loose_box
         solid = area / max(bw * bh, 1) > LETTER_SOLID and bw * bh > LETTER_BLOCK * w * h
-        keep[k] = not touches and not solid and area >= 4
+        # A grain line or a streak is long and thin; a letter, even an I, is not this drawn out and this sparse.
+        streak = max(bw, bh) / max(min(bw, bh), 1) > LETTER_LONG and area / max(bw * bh, 1) < 0.5
+        keep[k] = not touches and not solid and not streak and area >= least
     return keep[parts]
 
 
@@ -89,12 +120,11 @@ def hole(cover, boxes, loose=()):
         x1, y1 = min(size, int(math.ceil((r + grow) * size))), min(size, int(math.ceil((b + grow) * size)))
         if x1 - x0 < 2 or y1 - y0 < 2:
             continue
-        found = letters(gray[y0:y1, x0:x1])
-        if box in loose:
-            if found is not None:
-                mask[y0:y1, x0:x1] |= lettered(found)
-            continue
-        mask[y0:y1, x0:x1] |= True if found is None else found
+        found = letters(gray[y0:y1, x0:x1], cover[y0:y1, x0:x1])
+        if found is not None:
+            mask[y0:y1, x0:x1] |= lettered(found, box in loose)
+        elif box not in loose:
+            mask[y0:y1, x0:x1] = True
     return binary_dilation(mask, iterations=GLYPH_GROW)
 
 
