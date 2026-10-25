@@ -19,7 +19,7 @@ Tested on Spotify 9.1.94 under iOS 26, with Redesigned UI on.
 - **Local Albums**: your local files grouped into albums, the way iTunes and YouTube Music show them.
   - Sort by title, artist or recently added.
   - Each album has a page laid out like Spotify's own album pages, with Play, Shuffle and Edit Info.
-  - Albums play as albums, with the album's name at the top of the player.
+  - Albums play from the queue, with the album's name at the top of the player.
   - Open it from the button in Your Library's header, or from **Mod Settings → Local albums**.
 - **Add from Google Drive**: paste a share link to a song, a folder or a .zip.
   - FLAC, WAV and AIFF are converted to AAC 256 kbps, with their tags and cover kept.
