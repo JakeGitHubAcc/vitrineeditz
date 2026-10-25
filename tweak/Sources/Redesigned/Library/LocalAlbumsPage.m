@@ -635,6 +635,11 @@ UIViewController *SGRLocalAlbumsPageNew(void) {
     return [SGRLocalAlbumsPage new];
 }
 
+// The player's artist sheet for a local file opens its album here (Shared/LocalFiles/LocalLinks.m).
+__attribute__((constructor)) static void registerAlbumOpener(void) {
+    if (SGRedesignedUI()) SGLocalFilesSetAlbumOpener(SGRShowLocalAlbumOf);
+}
+
 BOOL SGRShowLocalAlbumOf(UIViewController *owner, NSString *uri) {
     SGLocalAlbum *album = SGLocalAlbumOfTrack(uri);
     if (!album) return NO;

@@ -65,6 +65,13 @@ extern NSNotificationName const SGLocalFileEditsDidChangeNotification;
 // Main thread.
 void SGLocalFilesRecredit(void);
 
+// LocalLinks.m: what a tap on a local file's artist in the player offers, as Spotify's own tracks do: a sheet
+// with Go to Artist for each artist it is credited to (their page in Spotify, found by name, or Spotify's search
+// for the name) and Go to Album, its page in Local Albums, where the look has one. `source` is what was tapped.
+void SGLocalFileShowLinks(NSString *uri, UIView *source);
+// The look's way to open a local file's album page (Redesigned/Library/LocalAlbumsPage.m), NO when it has none.
+void SGLocalFilesSetAlbumOpener(BOOL (*open)(UIViewController *owner, NSString *uri));
+
 // EditInfoMenu.x: the editor for a local file, presented over `presenter`.
 void SGLocalFilePresentEditor(UIViewController *presenter, NSString *uri);
 
