@@ -35,6 +35,7 @@
 #import "Redesigned/Album/Album.h"
 #import "Redesigned/Artist/Artist.h"
 #import "Redesigned/Library/Library.h"
+#import "Shared/AnimatedArtwork/SGCoverAnimator.h"
 #import "Pages.h"
 
 static const CGFloat kRowHeight = 56;
@@ -106,6 +107,8 @@ static UIViewController *modSettingsPage(void) {
     [features addObjectsFromArray:@[
         pageRow(@"AirPods gestures", @"airpods", UIColor.systemCyanColor, ^UIViewController *{ return SGHeadGesturesSettingsPage(); }),
         pageRow(@"Listening stats", @"chart.bar.fill", UIColor.systemBlueColor, ^UIViewController *{ return SGListeningStatsPage(); }),
+        // Covers animated on the user's computer: its own page, as the lock screen links to it too.
+        pageRow(@"Animated covers", @"wand.and.stars", SGColorRGB(0xBF5AF2), ^UIViewController *{ return SGAnimatedCoversPage(); }),
         // Local Albums and Add from Google Drive, here too because their button in Your Library's header is the redesign's.
         pageRow(@"Local albums", @"square.stack.3d.up.fill", SGColorRGB(0xFF9F0A), ^UIViewController *{ return SGRLocalAlbumsPageNew(); }),
         SGWithTile(SGActionRow(@"Add from Google Drive", @"Songs from a share link, saved as local files", ^{

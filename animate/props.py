@@ -110,6 +110,30 @@ JEWELRY = ("chain", "necklace", "ring", "bracelet", "watch", "earring", "pendant
 JEWEL_SCORE, JEWEL_LARGEST = 0.2, 0.08
 
 
+# Text, for what the reader misses (lines in perspective, To the Stars' wall): what is looked for, the least score,
+# the most of the cover a box may be (a line whose letters cannot be told from its ground is painted out whole), and
+# how much of it a face, or text already read, may cover.
+TEXT_WORDS, TEXT_SCORE, TEXT_LARGEST, TEXT_OVER = ("text", "words", "title", "lettering"), 0.3, 0.35, 0.5
+
+
+def text_boxes(cover, path, read, faces):
+    """Boxes of text in `cover` (RGB, square) the reader did not read, in shares of the side. `read` and `faces` are
+    the boxes already known, in shares too."""
+    side = cover.shape[0]
+    pixels = np.clip(cover, 0, 255).astype(np.uint8)
+    out = []
+    for box, name, _ in named(pixels, path, TEXT_WORDS, TEXT_SCORE):
+        share = tuple(float(v) / side for v in box)
+        if (share[2] - share[0]) * (share[3] - share[1]) > TEXT_LARGEST:
+            continue
+        if any(crowd.overlap(share, face) > 0.05 or crowd.overlap(face, share) > 0.2 for face in faces):
+            continue
+        if any(crowd.overlap(share, other) > TEXT_OVER for other in list(read) + out):
+            continue
+        out.append(share)
+    return out
+
+
 def jewelry(cover, path):
     """The outlines (bool, square) of the jewelry in `cover` (RGB uint8, square)."""
     side = cover.shape[0]

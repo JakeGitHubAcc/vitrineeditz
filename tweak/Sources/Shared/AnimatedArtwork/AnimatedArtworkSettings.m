@@ -62,6 +62,74 @@ static void animateTapped(void) {
     [top presentViewController:sheet animated:YES completion:nil];
 }
 
+#pragma mark - the Animated Covers page
+
+// Copies every cover the computer made that this iPhone lacks, and says how many.
+static void restoreTapped(void) {
+    if (!SGAnimatedCoverServer()) {
+        SGAnimatedCoverAskServer(nil);   // which copies them once the address is saved
+        return;
+    }
+    SGAnimatedCoverRestore(^(NSUInteger added, NSString *error) {
+        tell(error ? @"Not copied" : @"Animated covers",
+             error ?: (added ? [NSString stringWithFormat:@"%lu animated cover%@ copied to this iPhone.", (unsigned long)added, added == 1 ? @"" : @"s"]
+                             : @"This iPhone already has every cover your computer made."));
+    });
+}
+
+UIViewController *SGAnimatedCoversPage(void) {
+    SGModRow *computer = SGStatActionRow(@"Computer", @"Where Vitrine Animate runs, as it shows when it starts",
+                                         ^NSString *{ return SGAnimatedCoverServer() ?: @"Not set"; },
+                                         ^{ SGAnimatedCoverAskServer(nil); });
+    SGModRow *kept = SGStatRow(@"Saved on this iPhone", ^NSString *{ return [NSString stringWithFormat:@"%lu", (unsigned long)SGAnimatedCoverCount()]; });
+    SGModRow *restore = SGActionRow(@"Copy covers from computer", @"Every cover Vitrine Animate has made that this iPhone doesn't "
+                                                                   @"have, such as after Spotify is installed again. Also happens on its own when Spotify opens",
+                                    ^{ restoreTapped(); });
+
+    SGModRow *text = SGChoiceRow(@"Text", @"What the cover's own text does", SGKeyAnimateText,
+                                 @[@"Keep", @"Fade", @"Hide", @"Spray"], SGAnimateTextKeep);
+    text.choiceNotes = @[@"Stays still while the rest moves",
+                         @"Fades out and back in over each loop, as some animated covers do",
+                         @"Painted out of the cover",
+                         @"Taken off along its diagonal and sprayed back on, with a spray paint edge"];
+
+    NSMutableArray<SGModRow *> *moves = [NSMutableArray array];
+    for (NSArray<NSString *> *effect in SGAnimateEffects()) {
+        [moves addObject:SGSwitchRow(effect[1], effect[2], [SGKeyAnimateEffectPrefix stringByAppendingString:effect[0]])];
+    }
+
+    return [[SGModPage alloc] initWithTitle:@"Animated Covers"
+        intro:@"Covers are animated on your computer by Vitrine Animate. These apply to covers animated from now on; "
+              @"Animate Again in an album's ⋯ remakes one."
+        sections:@[
+            SGSection(@"Your computer", @[computer, kept, restore]),
+            SGSection(@"Text", @[text]),
+            SGNotedSection(@"Style", @[
+                SGOptionRow(@"Camera sway", @"A slow, slight drift and push of the whole picture", SGKeyAnimateSway),
+                SGOptionRow(@"Line boil", @"For a drawn or painted cover: its lines shimmer and jump a little, as if it were "
+                                          @"redrawn a few times by hand and the drawings cycled", SGKeyAnimateBoil),
+            ], @"Line boil suits cartoons, sketches and paintings. On a photo it only looks shaky."),
+            SGNotedSection(@"What moves", moves, @"Each is found on the cover and moved on its own. Turning Sky off also "
+                                                 @"skips the video model, so covers are made in about half the time."),
+        ] footer:nil];
+}
+
+NSArray<NSArray<NSString *> *> *SGAnimateEffects(void) {
+    // The server's name for each (animate/vitrine_animate.py's EFFECTS), its title and what it does.
+    return @[
+        @[@"people", @"People", @"Each person moves on their own, the main person breathing, a crowd swaying"],
+        @[@"things", @"Things", @"Bees, birds and butterflies hover, clouds drift, flowers nod and bubbles bob"],
+        @[@"sway", @"Curtains and trees", @"Sway from where they hang or stand"],
+        @[@"fog", @"Fog and smoke", @"A smoke of its own drifts over them"],
+        @[@"drips", @"Drips", @"Paint and drips run down and back, and drops fall"],
+        @[@"water", @"Water", @"Its detail is smoothed and a moving sea laid over it in perspective"],
+        @[@"glints", @"Glints", @"Shiny things and jewelry catch the light"],
+        @[@"light", @"Shifting light", @"The light slowly brightens and dims across the cover"],
+        @[@"model", @"Sky", @"Clouds and skies move with the video model"],
+        @[@"grain", @"Film grain", @"A light grain over the whole clip"],
+    ];
+}
+
 NSArray *SGLockScreenMotionRows(void) {
     if (@available(iOS 26.0, *)) {
         SGLockScreenArtwork();   // moves the old switch over before the row reads the new key
@@ -92,41 +160,9 @@ NSArray *SGLockScreenMotionRows(void) {
                                             ^NSString *{ return SGAnimatedCoverStatus(SGLockMotionPlayingPicture()) ?: @"Not animated"; },
                                             ^{ animateTapped(); });
         animate.visible = lowData.visible;
-        SGModRow *computer = SGStatActionRow(@"Computer", @"Where Vitrine Animate runs, as it shows when it starts",
-                                             ^NSString *{ return SGAnimatedCoverServer() ?: @"Not set"; },
-                                             ^{ SGAnimatedCoverAskServer(nil); });
-        computer.visible = lowData.visible;
-        SGModRow *text = SGChoiceRow(@"Text on animated covers", @"Keep holds the cover's text still. Fade lets it fade out "
-                                                                  @"and back in over each loop, as some animated covers do. "
-                                                                  @"Hide paints it out. Spray takes it off along a "
-                                                                  @"diagonal and sprays it back on, with a spray paint edge. "
-                                                                  @"For covers animated from now on; Animate Again remakes one",
-                                     SGKeyAnimateText, @[@"Keep", @"Fade", @"Hide", @"Spray"], SGAnimateTextKeep);
-        text.visible = lowData.visible;
-        SGModRow *sway = SGOptionRow(@"Camera sway", @"A slow, slight drift and push of the whole picture. For covers animated "
-                                                     @"from now on", SGKeyAnimateSway);
-        sway.visible = lowData.visible;
-        SGModRow *kept = SGStatRow(@"Animated covers saved", ^NSString *{ return [NSString stringWithFormat:@"%lu", (unsigned long)SGAnimatedCoverCount()]; });
-        kept.visible = lowData.visible;
-        // The covers the computer made, for a Spotify deleted and installed again; also done on its own at launch.
-        SGModRow *restore = SGActionRow(@"Copy covers from computer", @"Downloads every animated cover Vitrine Animate has made "
-                                                                       @"that this iPhone doesn't have, such as after Spotify is deleted "
-                                                                       @"and installed again. Also happens on its own when Spotify opens", ^{
-            void (^copy)(void) = ^{
-                SGAnimatedCoverRestore(^(NSUInteger added, NSString *error) {
-                    NSString *message = error ?: (added ? [NSString stringWithFormat:@"%lu animated cover%@ copied to this iPhone.",
-                                                                    (unsigned long)added, added == 1 ? @"" : @"s"]
-                                                        : @"This iPhone already has every cover your computer made.");
-                    UIAlertController *alert = [UIAlertController alertControllerWithTitle:error ? @"Not copied" : @"Animated covers"
-                                                                                   message:message preferredStyle:UIAlertControllerStyleAlert];
-                    [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleCancel handler:nil]];
-                    [SGTopController() presentViewController:alert animated:YES completion:nil];
-                });
-            };
-            if (SGAnimatedCoverServer()) copy();
-            else SGAnimatedCoverAskServer(nil);   // which copies them once the address is saved
-        });
-        restore.visible = lowData.visible;
+        // The computer, the text and style and what moves are on a page of their own (SGAnimatedCoversPage).
+        SGModRow *settings = SGPageRow(@"Animated cover settings", ^UIViewController *{ return SGAnimatedCoversPage(); });
+        settings.visible = lowData.visible;
         return @[
             SGChoiceRow(@"Full-screen artwork", @"The Canvas or Apple Music's animated cover, or the lyrics a line at a time. "
                                                  @"Every song shows the cover where a song has neither, in the style picked below. "
@@ -138,11 +174,7 @@ NSArray *SGLockScreenMotionRows(void) {
             star,
             sources,
             animate,
-            text,
-            sway,
-            computer,
-            kept,
-            restore,
+            settings,
             lowData,
         ];
     }
