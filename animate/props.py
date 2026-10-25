@@ -68,22 +68,60 @@ def kind_of(words):
     return None
 
 
-def found(cover, path):
-    """The things in `cover` (RGB uint8, square) that move: (kind, mask, box in pixels)."""
+def named(cover, path, words, score=SCORE):
+    """What the finder sees of `words` in `cover` (RGB uint8, square), at least `score` sure: (box in pixels,
+    its words, score), the surest first."""
     import torch
     from PIL import Image
-    finder_words, finder, outliner_words, outliner = models(path)
+    finder_words, finder, _, _ = models(path)
     side = cover.shape[0]
-    image = Image.fromarray(cover)
-    prompt = ". ".join(KINDS) + "."
-    inputs = finder_words(images=image, text=prompt, return_tensors="pt")
+    inputs = finder_words(images=Image.fromarray(cover), text=". ".join(words) + ".", return_tensors="pt")
     with torch.inference_mode():
         out = finder(**inputs)
     result = finder_words.post_process_grounded_object_detection(
-        out, inputs.input_ids, threshold=SCORE, text_threshold=WORD_SCORE, target_sizes=[(side, side)])[0]
+        out, inputs.input_ids, threshold=score, text_threshold=min(WORD_SCORE, score), target_sizes=[(side, side)])[0]
     names = result.get("text_labels", result["labels"])
+    return sorted(((b, str(n), float(s)) for b, n, s in zip(result["boxes"].numpy(), names, result["scores"].numpy())),
+                  key=lambda f: -f[2])
+
+
+def outlines(cover, path, boxes):
+    """SAM's outline (bool, square) of what is in each of `boxes` (pixels) in `cover` (RGB uint8)."""
+    import torch
+    from PIL import Image
+    _, _, outliner_words, outliner = models(path)
+    inputs = outliner_words(Image.fromarray(cover), input_boxes=[[list(map(float, b)) for b in boxes]], return_tensors="pt")
+    with torch.inference_mode():
+        out = outliner(**inputs, multimask_output=False)
+    masks = outliner_words.image_processor.post_process_masks(
+        out.pred_masks, inputs["original_sizes"], inputs["reshaped_input_sizes"])[0][:, 0].numpy()
+    return [m.astype(bool) for m in masks]
+
+
+# Jewelry, for effects.py's glints: what is looked for, the finder's least score for it (small and thin, the
+# finder is less sure of it than of a bee), and the most of the cover one piece may be.
+JEWELRY = ("chain", "necklace", "ring", "bracelet", "watch", "earring", "pendant", "jewelry", "grill")
+JEWEL_SCORE, JEWEL_LARGEST = 0.2, 0.08
+
+
+def jewelry(cover, path):
+    """The outlines (bool, square) of the jewelry in `cover` (RGB uint8, square)."""
+    side = cover.shape[0]
+    boxes = []
+    for box, name, _ in named(cover, path, JEWELRY, JEWEL_SCORE):
+        if (box[2] - box[0]) * (box[3] - box[1]) / side ** 2 > JEWEL_LARGEST:
+            continue
+        if any(crowd.overlap(box, other) > SAME for other in boxes):
+            continue
+        boxes.append(box)
+    return outlines(cover, path, boxes) if boxes else []
+
+
+def found(cover, path):
+    """The things in `cover` (RGB uint8, square) that move: (kind, mask, box in pixels)."""
+    side = cover.shape[0]
     finds = []
-    for box, name, score in sorted(zip(result["boxes"].numpy(), names, result["scores"].numpy()), key=lambda f: -f[2]):
+    for box, name, score in named(cover, path, KINDS):
         kind = kind_of(str(name))
         if not kind:
             continue
@@ -100,12 +138,7 @@ def found(cover, path):
     finds = [(k, b) for k, b in finds if sum(holds(b, o) for _, o in finds if o is not b) < GROUP]
     if not finds:
         return []
-    inputs = outliner_words(image, input_boxes=[[b.tolist() for _, b in finds]], return_tensors="pt")
-    with torch.inference_mode():
-        out = outliner(**inputs, multimask_output=False)
-    masks = outliner_words.image_processor.post_process_masks(
-        out.pred_masks, inputs["original_sizes"], inputs["reshaped_input_sizes"])[0][:, 0].numpy()
-    return [(k, m.astype(bool), b) for (k, b), m in zip(finds, masks)]
+    return [(k, m, b) for (k, b), m in zip(finds, outlines(cover, path, [b for _, b in finds]))]
 
 
 class Props:

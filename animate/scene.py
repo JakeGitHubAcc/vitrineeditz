@@ -27,6 +27,11 @@ SOLID = {
     "rock", "grandstand", "trade name", "light", "sconce", "chandelier", "bed", "sofa", "armchair",
 }
 CURTAIN = "curtain"
+# The only kinds the model's motion may move: what flows. Moving the rest bent whatever stood in it (a gravestone,
+# a speaker behind fog); what moves there moves as layers of its own (crowd.py, props.py, curtains, fog.py).
+FLUID = {"sky", "water", "sea", "river", "lake", "waterfall", "fountain", "swimming pool"}
+# The fluid's soft edge in pixels, and the least share of the cover it must be for the model to run at all.
+FLUID_SOFT, FLUID_LEAST = 4, 0.03
 # How much of the model's motion is held off solid things, and the soft edge of where they are, in pixels.
 SOLID_HOLD, SOLID_SOFT = 0.9, 3
 # How sure the scene model must be of a pixel's kind for it to be held.
@@ -84,6 +89,13 @@ class Scene:
             return np.zeros((self.side, self.side), np.float32)
         ids = [k for k, v in self.names.items() if v in names]
         return np.isin(self.kinds, ids).astype(np.float32)
+
+    def fluid(self):
+        """Where the model's motion may move the cover, 0 to 1; None without a scene model, when it may move
+        anything that is not held."""
+        if self.kinds is None:
+            return None
+        return np.clip(gaussian_filter(self.of(FLUID), FLUID_SOFT), 0, 1)
 
     def solid(self):
         """How much of the model's motion to hold off each pixel."""
