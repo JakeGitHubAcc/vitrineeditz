@@ -26,6 +26,8 @@ ERASE_PAD, LETTER_CONTRAST, GLYPH_GROW, FADE_EDGE = 0.08, 60, 3, 2
 LETTER_SOLID, LETTER_BLOCK = 0.8, 0.01
 # A part this many times longer than it is wide, and sparse, is a streak or the wall's grain rather than a letter.
 LETTER_LONG = 6
+# However solid, a part this drawn out is a seam or a rule, not a letter.
+LETTER_SEAM = 10
 # The least a letter's part is, as a share of its box's height squared, below which it is a speck of grain.
 LETTER_SPECK = 0.035
 # How far apart a letter's pieces may be and still be joined, in pixels.
@@ -33,6 +35,9 @@ LETTER_JOIN = 7
 # A drop shadow or dark outline: as far from the letters as it is looked for, as a share of the line's
 # height, and how much darker than what is behind it a pixel must be to be one, out of 255.
 SHADOW_REACH, SHADOW_DARKER = 0.2, 8
+# The farthest a shadow is looked for whatever the box's height, as a share of the cover's side: a loose box many
+# lines tall reached far past its letters and took in the dark seam where To the Stars' wall meets the water.
+SHADOW_MOST = 0.012
 # The fade: the text shows for this share of the loop at its start, fades out over FADE seconds, stays
 # away, and fades back in to show again for this share at the end. The first frame, the poster, has it.
 SHOWN_FIRST, SHOWN_LAST, FADE = 0.3, 0.12, 1.2
@@ -100,7 +105,9 @@ def lettered(found, loose_box=False):
         touches = (x == 0 or y == 0 or x + bw >= w or y + bh >= h) and loose_box
         solid = area / max(bw * bh, 1) > LETTER_SOLID and bw * bh > LETTER_BLOCK * w * h
         # A grain line or a streak is long and thin; a letter, even an I, is not this drawn out and this sparse.
-        streak = max(bw, bh) / max(min(bw, bh), 1) > LETTER_LONG and area / max(bw * bh, 1) < 0.5
+        # A solid one this drawn out is a seam (where To the Stars' wall meets the water), not a letter either.
+        drawn_out = max(bw, bh) / max(min(bw, bh), 1)
+        streak = drawn_out > LETTER_LONG and (area / max(bw * bh, 1) < 0.5 or drawn_out > LETTER_SEAM)
         keep[k] = not touches and not solid and not streak and area >= least
     return keep[parts]
 
@@ -136,7 +143,7 @@ def shadow(cover, behind, letters, boxes):
     darker = (behind.astype(np.float32) @ luma) - (cover.astype(np.float32) @ luma) > SHADOW_DARKER
     found = np.zeros((size, size), bool)
     for l, t, r, b in boxes:
-        reach = max(2, int(round(SHADOW_REACH * (b - t) * size)))
+        reach = max(2, int(round(min(SHADOW_REACH * (b - t), SHADOW_MOST) * size)))
         grow = reach + int(ERASE_PAD * (b - t) * size)
         x0, y0 = max(0, int(l * size) - grow), max(0, int(t * size) - grow)
         x1, y1 = min(size, int(math.ceil(r * size)) + grow), min(size, int(math.ceil(b * size)) + grow)
@@ -157,7 +164,7 @@ def plate(cover, boxes, lama, loose=()):
     where = hole(image, boxes, loose)
     boxes = list(boxes) + list(loose)
     # What is behind the letters and around them, to tell their shadow from it.
-    reach = max([int(round(SHADOW_REACH * (b - t) * image.shape[0])) for _, t, _, b in boxes] + [2])
+    reach = max([int(round(min(SHADOW_REACH * (b - t), SHADOW_MOST) * image.shape[0])) for _, t, _, b in boxes] + [2])
     behind = label.inpaint(image.astype(np.float32) / 255, binary_dilation(where, iterations=reach).astype(np.float32), lama) * 255
     where |= shadow(image, behind, where, boxes)
     filled = label.inpaint(image.astype(np.float32) / 255, where.astype(np.float32), lama)
