@@ -1,8 +1,10 @@
 // SGAnimatedCoverMenu (SGCoverAnimator.h): an album's animated cover in a ⋯ menu, the player's and an album
 // page's. One submenu, Animated Cover, which says what there is of it: what can be done with it first, then
-// the two settings that go with the next cover sent.
+// Animated Cover Settings, which opens the page of the settings that go with the next cover sent.
 #import <UIKit/UIKit.h>
 #import "Core/SGCore.h"
+#import "Settings/SGPage.h"
+#import "Settings/SGPageStyle.h"
 #import "SGCoverAnimator.h"
 
 static UIImage *symbol(NSString *name) {
@@ -42,24 +44,14 @@ NSArray<UIMenuElement *> *SGAnimatedCoverMenu(NSString *picture, void (^send)(vo
         [actions addObject:make];
     }
 
-    NSArray<NSString *> *wordings = @[@"Keep", @"Fade In and Out", @"Hide", @"Spray Off and On"];
-    NSInteger chosen = MIN(MAX(SGInt(SGKeyAnimateText, SGAnimateTextKeep), 0), (NSInteger)wordings.count - 1);
-    NSMutableArray<UIMenuElement *> *picks = [NSMutableArray array];
-    for (NSInteger i = 0; i < (NSInteger)wordings.count; i++) {
-        UIAction *pick = [UIAction actionWithTitle:wordings[(NSUInteger)i] image:nil identifier:nil
-                                           handler:^(UIAction *action) { SGSetInt(SGKeyAnimateText, i); }];
-        pick.state = i == chosen ? UIMenuElementStateOn : UIMenuElementStateOff;
-        [picks addObject:pick];
-    }
-    UIMenu *text = [UIMenu menuWithTitle:@"Cover Text" image:symbol(@"textformat") identifier:nil options:0 children:picks];
-    text.subtitle = wordings[(NSUInteger)chosen];
-    BOOL swaying = SGHidden(SGKeyAnimateSway);   // an option: off until switched on
-    UIAction *sway = [UIAction actionWithTitle:@"Camera Sway" image:symbol(@"video") identifier:nil
-                                       handler:^(UIAction *action) { SGSetEnabled(SGKeyAnimateSway, !swaying); }];
-    sway.state = swaying ? UIMenuElementStateOn : UIMenuElementStateOff;
-    // Under their own heading, as they go with the next cover made rather than the one there is.
-    UIMenu *settings = [UIMenu menuWithTitle:@"For the Next One Made" image:nil identifier:nil
-                                     options:UIMenuOptionsDisplayInline children:@[text, sway]];
+    // The settings for the next cover made are a page of their own (SGAnimatedCoversPage), opened from here.
+    UIAction *open = [UIAction actionWithTitle:@"Animated Cover Settings" image:symbol(@"slider.horizontal.3") identifier:nil
+                                       handler:^(UIAction *action) {
+        UIViewController *top = SGTopController();
+        if (top) SGShowPage(top, SGAnimatedCoversPage());
+    }];
+    open.subtitle = @"Text, camera sway, line boil and what moves";
+    UIMenu *settings = [UIMenu menuWithTitle:@"" image:nil identifier:nil options:UIMenuOptionsDisplayInline children:@[open]];
 
     UIMenu *menu = [UIMenu menuWithTitle:@"Animated Cover" image:symbol(@"sparkles.rectangle.stack") identifier:nil options:0
                                 children:@[[UIMenu menuWithTitle:@"" image:nil identifier:nil options:UIMenuOptionsDisplayInline children:actions], settings]];
