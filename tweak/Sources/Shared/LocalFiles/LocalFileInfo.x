@@ -101,6 +101,30 @@ static NSString *credited(UILabel *label, NSString *text) {
 }
 
 // Set again as it is: the setters swap the words and keep the label's attributes.
+// The header's label is as wide as Spotify's word ("Queue"), so an album's name in it was cut short ("King…").
+// While it names an album it is widened about its middle to fit the name, short of the buttons on either side.
+static const CGFloat kHeaderClear = 76;
+
+static CGRect headerBounds(UILabel *label, CGRect bounds) {
+    if (label != sg_headerLabel || !sg_headerTitle || !label.window) return bounds;
+    CGFloat room = label.window.bounds.size.width - 2 * kHeaderClear;
+    CGFloat need = ceil([label sizeThatFits:CGSizeMake(CGFLOAT_MAX, bounds.size.height)].width);
+    bounds.size.width = MAX(bounds.size.width, MIN(need, room));
+    return bounds;
+}
+
+// Widened now, and nothing around it cutting it off.
+static void widenHeader(UILabel *label) {
+    if (label != sg_headerLabel || !sg_headerTitle) return;
+    CGRect wide = headerBounds(label, label.bounds);
+    if (wide.size.width <= label.bounds.size.width) return;
+    label.bounds = wide;
+    UIView *up = label.superview;
+    for (NSUInteger i = 0; up && i < 2; i++, up = up.superview) {
+        if (up.clipsToBounds && up.bounds.size.width < wide.size.width) up.clipsToBounds = NO;
+    }
+}
+
 static void setAgain(UILabel *label, NSString *text) {
     if (label.attributedText.length) {
         NSMutableAttributedString *again = [label.attributedText mutableCopy];
@@ -370,6 +394,7 @@ static void artistLineSet(UILabel *label) {
 - (void)setText:(NSString *)text {
     artistLineSet(self);
     %orig(credited(self, text) ?: text);
+    widenHeader(self);
 }
 
 - (void)setAttributedText:(NSAttributedString *)text {
@@ -383,6 +408,21 @@ static void artistLineSet(UILabel *label) {
     NSMutableAttributedString *changed = [text mutableCopy];
     [changed replaceCharactersInRange:NSMakeRange(0, changed.length) withString:swap];
     %orig(changed);
+    widenHeader(self);
+}
+
+// Auto Layout sizes a view through its bounds: the header's label keeps the width the album's name needs.
+- (void)setBounds:(CGRect)bounds {
+    %orig(sg_headerTitle && self == sg_headerLabel ? headerBounds(self, bounds) : bounds);
+}
+
+// And a frame set by hand grows the same about its middle.
+- (void)setFrame:(CGRect)frame {
+    if (sg_headerTitle && self == sg_headerLabel) {
+        CGRect wide = headerBounds(self, (CGRect){CGPointZero, frame.size});
+        frame = CGRectInset(frame, -(wide.size.width - frame.size.width) / 2, 0);
+    }
+    %orig(frame);
 }
 %end
 
