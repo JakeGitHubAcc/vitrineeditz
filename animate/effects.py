@@ -21,6 +21,9 @@ LONG = 8.0
 # clip them); how far a letter's shade must be from the box's usual one, out of 255; how far the letters
 # are grown for their soft edges, and the soft edge of the fade's mask, in pixels.
 ERASE_PAD, LETTER_CONTRAST, GLYPH_GROW, FADE_EDGE = 0.08, 60, 3, 2
+# A drop shadow or dark outline: as far from the letters as it is looked for, as a share of the line's
+# height, and how much darker than what is behind it a pixel must be to be one, out of 255.
+SHADOW_REACH, SHADOW_DARKER = 0.2, 8
 # The fade: the text shows for this share of the loop at its start, fades out over FADE seconds, stays
 # away, and fades back in to show again for this share at the end. The first frame, the poster, has it.
 SHOWN_FIRST, SHOWN_LAST, FADE = 0.3, 0.12, 1.2
@@ -61,10 +64,38 @@ def hole(cover, boxes):
     return binary_dilation(mask, iterations=GLYPH_GROW)
 
 
+def shadow(cover, behind, letters, boxes):
+    """1 where the letters darken what is around them, a drop shadow or an outline: near them, and darker
+    in `cover` (RGB array) than in `behind`, the cover with the letters and all around them painted out."""
+    size = cover.shape[0]
+    luma = np.array([0.299, 0.587, 0.114], dtype=np.float32)
+    darker = (behind.astype(np.float32) @ luma) - (cover.astype(np.float32) @ luma) > SHADOW_DARKER
+    found = np.zeros((size, size), bool)
+    for l, t, r, b in boxes:
+        reach = max(2, int(round(SHADOW_REACH * (b - t) * size)))
+        grow = reach + int(ERASE_PAD * (b - t) * size)
+        x0, y0 = max(0, int(l * size) - grow), max(0, int(t * size) - grow)
+        x1, y1 = min(size, int(math.ceil(r * size)) + grow), min(size, int(math.ceil(b * size)) + grow)
+        mine = letters[y0:y1, x0:x1]
+        near = binary_dilation(mine, iterations=reach) & ~mine
+        dark = near & darker[y0:y1, x0:x1]
+        # Only the dark that reaches the letters, not a dark design that happens to be near.
+        count, parts = cv2.connectedComponents(dark.astype(np.uint8))
+        touching = np.unique(parts[binary_dilation(mine, iterations=2) & dark])
+        found[y0:y1, x0:x1] |= np.isin(parts, touching[touching > 0])
+    return binary_dilation(found, iterations=1)
+
+
 def plate(cover, boxes, lama):
-    """`cover` (PIL, square) with its text painted out by LaMa, and the mask of where it was, soft at its edge."""
-    where = hole(np.asarray(cover), boxes)
-    filled = label.inpaint(np.asarray(cover, dtype=np.float32) / 255, where.astype(np.float32), lama)
+    """`cover` (PIL, square) with its text and its shadow painted out by LaMa, and the mask of where they
+    were, soft at its edge."""
+    image = np.asarray(cover)
+    where = hole(image, boxes)
+    # What is behind the letters and around them, to tell their shadow from it.
+    reach = max([int(round(SHADOW_REACH * (b - t) * image.shape[0])) for _, t, _, b in boxes] + [2])
+    behind = label.inpaint(image.astype(np.float32) / 255, binary_dilation(where, iterations=reach).astype(np.float32), lama) * 255
+    where |= shadow(image, behind, where, boxes)
+    filled = label.inpaint(image.astype(np.float32) / 255, where.astype(np.float32), lama)
     soft = gaussian_filter(binary_dilation(where, iterations=FADE_EDGE).astype(np.float32), FADE_EDGE / 2)
     soft = np.maximum(soft, where)
     return Image.fromarray((filled * 255 + 0.5).astype(np.uint8)), soft
