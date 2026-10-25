@@ -18,6 +18,7 @@
 #import "Headers/SPTPlayer.h"
 #import "Shared/Player/NowPlayingExtras.h"
 #import "Shared/Player/PlayerState.h"
+#import "LocalAlbums.h"
 #import "LocalFiles.h"
 
 // Called for every track in every list many times a second: one prefix check for any other track.
@@ -43,9 +44,18 @@ static NSDictionary *withEdit(NSDictionary *metadata, NSString *uri) {
 // The full player names the track from a model of its own rather than from -metadata (device, 9.1.94: the bar
 // showed "Song" by "C, A", the player "Song (feat. A)" by "C"). So while a local file whose title names guests
 // plays, the labels showing its own title, and the player's artist label showing its own artist, are given the
-// credited names as they are set. Main thread only: UILabel is set there.
+// credited names as they are set.
+//
+// And a local album played from its page plays from the queue (LocalAlbums.h), so the player's header says
+// Queue; while one of its tracks plays, the header names the album instead. The header's label is the one in the
+// row with the player's close button. Main thread only: UILabel is set there.
 static NSString *sg_rawTitle, *sg_shownTitle, *sg_rawArtist, *sg_shownArtist;
-static NSString *const kPlayerArtist = @"now-playing-subtitle-label";
+static NSString *const kPlayerArtist = @"now-playing-subtitle-label", *const kPlayerClose = @"now-playing-minimize-button";
+// The album the header names now, nil when none; the header's label; and what Spotify had it say.
+static NSString *sg_headerTitle, *sg_headerWord;
+static __weak UILabel *sg_headerLabel;
+// The most a row the header's label shares with the close button can be, in points.
+static const CGFloat kHeaderRow = 90;
 
 static BOOL inPlayerArtist(UIView *label) {
     UIView *v = label;
@@ -55,44 +65,92 @@ static BOOL inPlayerArtist(UIView *label) {
     return NO;
 }
 
+// Whether `label` is the player's header: in a short row that also holds the close button.
+static BOOL inPlayerHeader(UILabel *label) {
+    if (label == sg_headerLabel) return YES;
+    UIView *row = label.superview;
+    for (NSUInteger i = 0; row && i < 3 && row.bounds.size.height <= kHeaderRow; i++, row = row.superview) {
+        __block BOOL close = NO;
+        SGForEachView(row, ^(UIView *view) {
+            if (!close && [view.accessibilityIdentifier isEqualToString:kPlayerClose]) close = YES;
+        });
+        if (close) {
+            sg_headerLabel = label;
+            return YES;
+        }
+    }
+    return NO;
+}
+
 static NSString *credited(UILabel *label, NSString *text) {
-    if (!sg_rawTitle || !text.length || !NSThread.isMainThread) return nil;
-    if ([text isEqualToString:sg_rawTitle]) return sg_shownTitle;
+    if ((!sg_rawTitle && !sg_headerTitle) || !text.length || !NSThread.isMainThread) return nil;
+    if (sg_rawTitle && [text isEqualToString:sg_rawTitle]) return sg_shownTitle;
     if (sg_rawArtist && [text isEqualToString:sg_rawArtist] && inPlayerArtist(label)) return sg_shownArtist;
+    // Once the header's word is known only it is looked at; before, any short line might be the header.
+    if (sg_headerTitle && ![text isEqualToString:sg_headerTitle] && (sg_headerWord ? [text isEqualToString:sg_headerWord] : text.length <= 40)
+        && inPlayerHeader(label)) {
+        sg_headerWord = text;
+        return sg_headerTitle;
+    }
     return nil;
 }
 
-// Labels set before the player's state said the track changed are put right once it has.
+// Set again as it is: the setters swap the words and keep the label's attributes.
+static void setAgain(UILabel *label, NSString *text) {
+    if (label.attributedText.length) {
+        NSMutableAttributedString *again = [label.attributedText mutableCopy];
+        [again replaceCharactersInRange:NSMakeRange(0, again.length) withString:text];
+        label.attributedText = again;
+    } else {
+        label.text = text;
+    }
+}
+
+// Labels set before the player's state said the track changed are put right once it has, and a header that named
+// an album no longer playing says again what Spotify had it say.
 static void recreditLabels(void) {
-    if (!sg_rawTitle) return;
+    UILabel *header = sg_headerLabel;
+    if (header && !sg_headerTitle && sg_headerWord && ![header.text isEqualToString:sg_headerWord]) setAgain(header, sg_headerWord);
+    if (!sg_rawTitle && !sg_headerTitle) return;
     for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
         if (![scene isKindOfClass:UIWindowScene.class]) continue;
         for (UIWindow *window in ((UIWindowScene *)scene).windows) {
             SGForEachView(window, ^(UIView *view) {
                 if (![view isKindOfClass:UILabel.class]) return;
                 UILabel *label = (UILabel *)view;
-                if (!credited(label, label.text)) return;
-                // Set again as it is: the setters swap the words and keep the label's attributes.
-                if (label.attributedText.length) label.attributedText = label.attributedText;
-                else label.text = label.text;
+                if (credited(label, label.text)) setAgain(label, label.text);
             });
         }
     }
 }
 
 static void creditPlaying(NSString *uri) {
-    NSDictionary *shown = SGLocalFileShown(uri);
-    if (![shown[@"credited"] boolValue]) {
-        sg_rawTitle = sg_shownTitle = sg_rawArtist = sg_shownArtist = nil;
-        return;
+    NSString *album = SGLocalAlbumPlayingTitle();
+    if (!album && sg_headerTitle) {
+        // The header said the album's title; it goes back to Spotify's word below.
+        UILabel *header = sg_headerLabel;
+        if (header && sg_headerWord && [header.text isEqualToString:sg_headerTitle]) {
+            sg_headerTitle = nil;
+            setAgain(header, sg_headerWord);
+        }
     }
-    NSDictionary *info = SGLocalFileInfo(uri);
-    sg_rawTitle = info[@"title"];
-    sg_shownTitle = shown[@"title"];
-    sg_rawArtist = info[@"artist"];
-    sg_shownArtist = shown[@"artist"];
+    sg_headerTitle = album;
+    NSDictionary *shown = SGLocalFileShown(uri);
+    if ([shown[@"credited"] boolValue]) {
+        NSDictionary *info = SGLocalFileInfo(uri);
+        sg_rawTitle = info[@"title"];
+        sg_shownTitle = shown[@"title"];
+        sg_rawArtist = info[@"artist"];
+        sg_shownArtist = shown[@"artist"];
+    } else {
+        sg_rawTitle = sg_shownTitle = sg_rawArtist = sg_shownArtist = nil;
+    }
     recreditLabels();
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.4 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ recreditLabels(); });
+}
+
+void SGLocalFilesRecredit(void) {
+    creditPlaying(SGURIString(SGPlayerState().track.URI));
 }
 
 #pragma mark - the system's now playing artwork

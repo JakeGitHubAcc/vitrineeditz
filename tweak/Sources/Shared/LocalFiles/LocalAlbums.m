@@ -1,6 +1,5 @@
 // LocalAlbums.h says what the albums are made of and how one plays.
 #import <AudioToolbox/AudioToolbox.h>
-#import <objc/message.h>
 #import "Core/SGCore.h"
 #import "Headers/SPTPlayer.h"
 #import "Shared/Player/PlayerState.h"
@@ -435,8 +434,7 @@ static void skipTo(NSString *uri, NSUInteger tries, void (^done)(NSString *error
     done(nil);
 }
 
-// The album put after what is queued, then skipped to: the way that works whatever Spotify makes of a context of
-// local files, though the player then says it plays from the queue and goes on with what was playing after.
+// The album put after what is queued, then skipped to.
 static void playThroughQueue(SGLocalAlbum *album, NSUInteger from, BOOL shuffle, void (^done)(NSString *error)) {
     NSMutableArray<SGLocalTrack *> *order = [NSMutableArray array];
     if (shuffle) {
@@ -497,91 +495,25 @@ static void playThroughQueue(SGLocalAlbum *album, NSUInteger from, BOOL shuffle,
     } on:dispatch_get_main_queue()];
 }
 
-// Whether the player has gone to the album: to `first` when one was asked for, to any of its tracks on shuffle.
-static BOOL playingAlbum(SGLocalAlbum *album, NSString *first) {
-    NSString *playing = SGURIString(SGPlayerState().track.URI);
-    if (!playing) return NO;
-    if (first) return [playing isEqualToString:first];
-    for (SGLocalTrack *track in album.tracks) {
-        if ([track.uri isEqualToString:playing]) return YES;
-    }
-    return NO;
-}
-
-// Asks every quarter second, `tries` times, whether the player went to the album.
-static void awaitAlbum(SGLocalAlbum *album, NSString *first, NSUInteger tries, void (^done)(NSString *error), void (^fallBack)(void)) {
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        if (playingAlbum(album, first)) {
-            SGLog(@"local albums: playing %@ as a context of its own", album.title);
-            done(nil);
-        } else if (!tries) {
-            SGLog(@"local albums: the player did not go to %@ as a context, queueing it instead", album.title);
-            fallBack();
-        } else {
-            awaitAlbum(album, first, tries - 1, done, fallBack);
-        }
-    });
-}
-
-static void setValue(id object, id value, NSString *key) {
-    @try {
-        [object setValue:value forKey:key];
-    } @catch (NSException *exception) {
-        SGLog(@"local albums: %@ has no %@ (%@)", [object class], key, exception.reason);
-    }
-}
-
-// The album as a context of its own, the way Spotify plays an album: +[SPTPlayerContext contextWithTracks:]
-// named by its metadata, played with -playContext:options: from the track asked for (SPTPlayOptions' skipTo, an
-// SPTSkipToTrack by index) or shuffled (its playerOptionsOverride, SPTPlayerOptionOverrides' shufflingContext),
-// all in 9.1.94's binary. NO when this Spotify has no such methods; `fallBack` runs when the player has not gone to
-// the album within a few seconds.
-static BOOL playAsContext(SGLocalAlbum *album, NSUInteger from, BOOL shuffle, void (^done)(NSString *error), void (^fallBack)(void)) {
-    id player = SGPlayer();
-    Class contextClass = NSClassFromString(@"SPTPlayerContext"), trackClass = NSClassFromString(@"SPTPlayerTrack");
-    Class optionsClass = NSClassFromString(@"SPTPlayOptions"), skipClass = NSClassFromString(@"SPTSkipToTrack");
-    Class overridesClass = NSClassFromString(@"SPTPlayerOptionOverrides");
-    SEL make = NSSelectorFromString(@"contextWithTracks:"), play = NSSelectorFromString(@"playContext:options:");
-    if (!player || ![contextClass respondsToSelector:make] || ![player respondsToSelector:play] || !optionsClass ||
-        ![trackClass instancesRespondToSelector:@selector(initWithURI:albumURI:artistURI:andUID:)]) return NO;
-
-    NSMutableArray *tracks = [NSMutableArray arrayWithCapacity:album.tracks.count];
-    for (SGLocalTrack *track in album.tracks) {
-        id item = [[trackClass alloc] initWithURI:[NSURL URLWithString:track.uri] albumURI:nil artistURI:nil andUID:nil];
-        if (!item) return NO;
-        [tracks addObject:item];
-    }
-    id context = ((id (*)(id, SEL, id))objc_msgSend)(contextClass, make, tracks);
-    if (!context) return NO;
-    // What the player's header names a context by, as an album's context carries it.
-    setValue(context, @{@"context_description": album.title ?: @"", @"album_title": album.title ?: @""}, @"metadata");
-
-    id options = [optionsClass new];
-    if (shuffle) {
-        id overrides = [overridesClass new];
-        if (overrides) {
-            setValue(overrides, @YES, @"shufflingContext");
-            setValue(options, overrides, @"playerOptionsOverride");
-        }
-    } else if (skipClass) {
-        id skip = [skipClass new];
-        setValue(skip, @(from), @"trackIndex");
-        setValue(options, skip, @"skipTo");
-    }
-    @try {
-        ((id (*)(id, SEL, id, id))objc_msgSend)(player, play, context, options);
-    } @catch (NSException *exception) {
-        SGLog(@"local albums: playContext:options: threw %@", exception.reason);
-        return NO;
-    }
-    NSString *first = shuffle || from >= album.tracks.count ? nil : album.tracks[from].uri;
-    awaitAlbum(album, first, 12, done, fallBack);
-    return YES;
-}
+// The album last played from its page, by its key, for the player's header to name while it plays: played from
+// the queue, the player's header says Queue. (Played as a context of its own through
+// +[SPTPlayerContext contextWithTracks:] and -playContext:options:, the player stopped instead, 9.1.94.)
+static NSString *sg_playingKey, *sg_playingTitle;
 
 void SGLocalAlbumPlay(SGLocalAlbum *album, NSUInteger from, BOOL shuffle, void (^done)(NSString *error)) {
     NSCAssert(NSThread.isMainThread, @"local albums run on main");
-    if (!album.tracks.count) { done(@"The album has no tracks."); return; }
-    if (playAsContext(album, from, shuffle, done, ^{ playThroughQueue(album, from, shuffle, done); })) return;
-    playThroughQueue(album, from, shuffle, done);
+    playThroughQueue(album, from, shuffle, ^(NSString *error) {
+        if (!error) {
+            sg_playingKey = album.key;
+            sg_playingTitle = album.title;
+            SGLocalFilesRecredit();
+        }
+        done(error);
+    });
+}
+
+NSString *SGLocalAlbumPlayingTitle(void) {
+    if (!sg_playingKey) return nil;
+    SGLocalAlbum *album = SGLocalAlbumOfTrack(SGURIString(SGPlayerState().track.URI));
+    return [album.key isEqualToString:sg_playingKey] ? sg_playingTitle : nil;
 }
