@@ -432,7 +432,7 @@ def work(jobs, comfy, lama, faces, keep_labels, persons=None, scenes=None, finde
             # Standing water stays still under waves laid over it in perspective.
             water = kinds.of(liquid.WATER) * (kinds.sure >= liquid.WATER_SURE) if kinds.kinds is not None else np.zeros((side, side), np.float32)
             water = np.maximum(water, liquid.water_found(base, finders, np.maximum(keep, cut_out)))
-            waves = liquid.Waves(water, np.maximum(keep, cut_out), int(key[10:18], 16), FPS)
+            waves = liquid.Waves(base, water, np.maximum(keep, cut_out), int(key[10:18], 16), FPS)
             progress(0.23, "cutting out curtains and trees")
             drapes = scene.Curtains(things.plate, kinds.of({scene.CURTAIN}) > 0.5, keep, lama, int(key[8:16], 16))
             trees = scene.Curtains(drapes.plate, things.bend, keep, lama, int(key[24:32] or "7", 16), stand=True)

@@ -5,10 +5,8 @@ Drips (paint, blood, anything dripping, found by name with Grounding DINO and ou
 stretches slowly down from where it hangs and draws back, the most at its tip, and now and then a drop falls
 from the longest. The cover is only resampled downward, so nothing behind a drip needs painting in.
 
-Water (the scene model's sea, water, river and lake) is left still and a light pattern of waves is laid over
-it in perspective: the waves are worked out on the water's own plane and seen from the cover's eye, small and
-close together toward the horizon and larger toward the bottom, crests a little lighter and troughs a little
-darker, rolling toward the viewer.
+Water (the scene model's sea, water, river and lake, or water the finder names) has its own detail smoothed away
+and a simulated sea laid in its place in perspective (Waves).
 
 Every motion is made of whole cycles of the loop starting from none, so the last frame is the first.
 """
@@ -36,14 +34,22 @@ DRIP_RUN, DRIP_MOST, DRIP_CYCLES = 0.08, 0.02, (1, 2)
 DROPS, DROP_FALL, DROP_SECONDS, DROP_SIZE, DROP_FROM = 2, 0.08, 0.7, 0.006, 0.05
 
 WATER = {"sea", "water", "river", "lake", "swimming pool"}
-# What the finder looks for as water too, and its least score for it.
-WATER_WORDS, WATER_SCORE = ("water", "sea", "ocean", "lake", "river", "flood"), 0.4
+# What the finder looks for as water too, its least score for it, and the most of the cover its box may be: the
+# finder's scores for water move with the words asked, and a box over the whole cover was a background it took for
+# water (+44's, 0.79), where the flood on To the Stars is its lower part (0.52).
+WATER_WORDS, WATER_SCORE, WATER_BOX = ("water",), 0.3, 0.85
 # How sure the scene model must be, the least share of the cover water must be, and its soft edge in pixels.
 WATER_SURE, WATER_LEAST, WATER_SOFT = 0.5, 0.02, 3
-# The waves: how many, their length on the water's plane (shares of the cover's width at the bottom), how much a
-# crest lightens and a trough darkens, how far in from the horizon they fade in (a share of the water's depth),
-# and how many times each rolls over the loop.
-WAVES, WAVE_LONGEST, WAVE_SHORTEST, WAVE_AMOUNT, WAVE_HORIZON, WAVE_CYCLES = 7, 0.22, 0.05, 0.07, 0.25, (1, 2, 3)
+# The sea's surface: its tile's cells and size in metres, the wind's speed (m/s) and direction (radians, 0 across),
+# the smallest wave kept (m), how many times the tile repeats across the cover's width at the bottom, how much the
+# plane is stretched away from the eye, and how fast the waves go against deep water's own speed.
+SEA_N, SEA_SIZE, SEA_SPEED, SEA_WIND, SEA_SMALLEST, SEA_TILES, SEA_STRETCH, SEA_PACE = 256, 40.0, 6.0, 1.2, 0.05, 3.0, 0.45, 0.35
+# How far the water's own detail is smoothed (a share of the side), how high the eye is over the plane (how flat the
+# view is), how much a slope turns the light, the water's reflectance head on (Schlick's F0), how strongly the
+# reflection and a ripple's own light and shade change the water, where a glint starts (in the ripples' spreads)
+# and how strong it is, and how far in from the horizon the waves fade in (a share of the water's depth).
+SEA_SMOOTH, SEA_EYE, SEA_TILT, SEA_F0 = 0.02, 0.35, 2.5, 0.02
+SEA_AMOUNT, SEA_RIPPLE, SEA_SHINE, SEA_GLINT, WAVE_HORIZON = 0.5, 0.16, 2.4, 0.04, 0.12
 # How far around faces and text, and in from the cover's top and bottom, the waves ease off, as shares of the side.
 KEEP_EASE, EDGE_EASE = 0.03, 0.06
 
@@ -57,7 +63,7 @@ def water_found(cover, path, keep):
         return found
     pixels = np.clip(cover, 0, 255).astype(np.uint8)
     boxes = [box for box, name, _ in props.named(pixels, path, WATER_WORDS, WATER_SCORE)
-             if any(word in name for word in WATER_WORDS)]
+             if any(word in name for word in WATER_WORDS) and (box[2] - box[0]) * (box[3] - box[1]) <= WATER_BOX * side ** 2]
     if not boxes:
         return found
     for outline in props.outlines(pixels, path, boxes):
@@ -175,10 +181,17 @@ class Drips:
 
 
 class Waves:
-    """Waves laid over the water in a cover, in perspective; none (`self.mask` empty) where there is too little.
-    `water` is the scene model's 0 to 1 map of it, `keep` 1 where nothing may change (faces, text)."""
+    """The water in a cover (`cover`, float RGB, square) made a moving sea: its own detail smoothed away and a
+    simulated surface laid in its place in perspective; none (`self.mask` empty) where there is too little water.
+    `water` is the 0 to 1 map of it, `keep` 1 where nothing may change (faces, text, people).
 
-    def __init__(self, water, keep, seed, fps):
+    The surface is Tessendorf's (the FFT ocean of film work): a field of waves from the Phillips spectrum, each moving
+    at its own speed, every speed rounded to whole turns over the loop so the last frame is the first. It is seen on
+    the water's plane from the cover's eye: its slopes give each point's normal, which reflects more of the sky the
+    flatter the view, with a glint where a crest faces the light. That light is laid over the water's own smoothed
+    colors, so the cover keeps its grade (a black and white cover stays one)."""
+
+    def __init__(self, cover, water, keep, seed, fps):
         side = water.shape[0]
         self.side, self.fps = side, fps
         self.mask = np.zeros((side, side), np.float32)
@@ -190,34 +203,76 @@ class Waves:
         ys = np.nonzero(water.max(axis=1) > 0.5)[0]
         if not len(ys):
             return
-        # The horizon is the top of the water; the water's plane is seen from above it, nearer toward the bottom.
+        self.mask = mask.astype(np.float32)
+        # The water's own colors without its detail: blurred within the water only, so nothing around it bleeds in.
+        inside = (water > 0.5).astype(np.float32)
+        spread = SEA_SMOOTH * side
+        weight = gaussian_filter(inside, spread)
+        smooth = np.stack([gaussian_filter(cover[..., c] * inside, spread) for c in range(3)], -1) / np.maximum(weight, 1e-4)[..., None]
+        self.smooth = np.where(weight[..., None] > 1e-3, smooth, cover).astype(np.float32)
+        # The plane: the horizon is the top of the water, and a pixel's distance on the plane grows toward it.
         horizon = float(ys.min())
         y, x = np.mgrid[0:side, 0:side].astype(np.float32)
-        depth = np.clip((y - horizon) / max(side - horizon, 1), 0.02, 1)
+        depth = np.clip((y - horizon) / max(side - horizon, 1), 0.015, 1)
         distance = 1 / depth
-        self.u = (x - side / 2) / side * distance
-        self.v = distance
-        # Far waves crowd together and would shimmer: they fade in from the horizon.
-        mask *= smooth_ramp(depth / WAVE_HORIZON)
-        self.mask = mask.astype(np.float32)
-        rng = np.random.default_rng(seed)
-        self.waves = []
-        for _ in range(WAVES):
-            angle = math.radians(rng.uniform(-50, 50))
-            length = rng.uniform(WAVE_SHORTEST, WAVE_LONGEST)
-            self.waves.append((math.sin(angle) / length, math.cos(angle) / length, int(rng.choice(WAVE_CYCLES)),
-                               rng.uniform(0, 2 * math.pi), rng.uniform(0.5, 1.0)))
-        total = sum(w[4] for w in self.waves)
-        self.waves = [(a, b, c, p, w / total) for a, b, c, p, w in self.waves]
+        # Where each pixel looks on the tile, in its cells.
+        scale = SEA_TILES * SEA_N
+        self.map_x = np.mod((x - side / 2) / side * distance * scale, SEA_N).astype(np.float32)
+        self.map_y = np.mod(distance * scale * SEA_STRETCH, SEA_N).astype(np.float32)
+        # Far off the waves are smaller than a pixel and would shimmer: they fade toward the smooth water.
+        self.detail = smooth_ramp(depth / WAVE_HORIZON).astype(np.float32)
+        # The view: flatter toward the horizon, so more of the sky is reflected there.
+        self.view_y = (1 / np.sqrt(1 + (distance * SEA_EYE) ** 2)).astype(np.float32)
+        self.seed = seed
+        self.loop = None
+
+    def surface(self, n):
+        """The spectrum, once the loop's length is known: each wave's start and its whole turns over the loop."""
+        rng = np.random.default_rng(self.seed)
+        k = np.fft.fftfreq(SEA_N, d=1.0 / SEA_N) * 2 * math.pi / SEA_SIZE
+        kx, kz = np.meshgrid(k, k)
+        length = np.sqrt(kx ** 2 + kz ** 2)
+        length[0, 0] = 1
+        biggest = SEA_SPEED ** 2 / 9.81
+        along = (kx * math.cos(SEA_WIND) + kz * math.sin(SEA_WIND)) / length
+        phillips = np.exp(-1 / (length * biggest) ** 2) / length ** 4 * along ** 2 * np.exp(-(length * SEA_SMALLEST) ** 2)
+        phillips[0, 0] = 0
+        self.h0 = (rng.standard_normal((SEA_N, SEA_N)) + 1j * rng.standard_normal((SEA_N, SEA_N))) * np.sqrt(phillips / 2)
+        # h0 at -k, conjugated: the other half of each wave, so the field is real.
+        self.h0_minus = np.conj(np.roll(np.flip(self.h0), 1, axis=(0, 1)))
+        # Deep water's speed for each wave over the loop, rounded to whole turns, at least one.
+        seconds = (n - 1) / self.fps
+        self.turns = np.maximum(np.round(np.sqrt(9.81 * length) * seconds / (2 * math.pi) * SEA_PACE), 1)
+        self.kx, self.kz = kx, kz
+        self.loop = n
 
     def over(self, frame, i, n):
-        """`frame` with the waves as they are in frame `i` of `n`: rolling toward the viewer, the same at both ends."""
+        """`frame` with the sea as it is in frame `i` of `n`."""
         if not self.mask.any():
             return frame
+        if self.loop != n:
+            self.surface(n)
         t = i / max(n - 1, 1)
-        height = np.zeros((self.side, self.side), np.float32)
-        for a, b, cycles, phase, weight in self.waves:
-            # The crests move toward the viewer (down the plane), a whole number of wavelengths over the loop.
-            height += weight * np.sin(2 * math.pi * (a * self.u + b * self.v + cycles * t) + phase).astype(np.float32)
-        light = 1 + WAVE_AMOUNT * 2.2 * height * self.mask
-        return frame * light[..., None]
+        turn = np.exp(1j * 2 * math.pi * self.turns * t)
+        h = self.h0 * turn + self.h0_minus * np.conj(turn)
+        slope_x = np.fft.ifft2(1j * self.kx * h).real.astype(np.float32)
+        slope_z = np.fft.ifft2(1j * self.kz * h).real.astype(np.float32)
+        # The slopes seen from the cover, each pixel sampling the tile where it looks on the plane.
+        sx = cv2.remap(slope_x, self.map_x, self.map_y, cv2.INTER_LINEAR, borderMode=cv2.BORDER_WRAP) * self.detail
+        sz = cv2.remap(slope_z, self.map_x, self.map_y, cv2.INTER_LINEAR, borderMode=cv2.BORDER_WRAP) * self.detail
+        sx, sz = sx * SEA_TILT, sz * SEA_TILT
+        # The normal against the eye: flatter views reflect more (Schlick's Fresnel), crests facing the light glint.
+        norm = np.sqrt(sx * sx + 1 + sz * sz)
+        facing = np.clip((self.view_y - sz) / norm, 0, 1)
+        fresnel = SEA_F0 + (1 - SEA_F0) * (1 - facing) ** 5
+        inside = self.mask > 0.5
+        mean = float(fresnel[inside].mean()) if inside.any() else 0.5
+        # Seen nearly from above, the reflection hardly changes over a ripple (the near water was a plain blur), so
+        # each ripple is also lit on the side facing the light and shaded on the other, measured in its own spread.
+        spread = float(np.sqrt((slope_x ** 2 + slope_z ** 2).mean())) * SEA_TILT + 1e-6
+        ripple = (sz * 0.8 + sx * 0.6) / spread
+        light = 1 + SEA_AMOUNT * (fresnel / max(mean, 1e-3) - 1) + SEA_RIPPLE * ripple
+        glint = np.clip(ripple - SEA_SHINE, 0, None) ** 2 * self.detail
+        sea = self.smooth * light[..., None] + 255 * SEA_GLINT * glint[..., None]
+        m = self.mask[..., None]
+        return frame * (1 - m) + sea * m
