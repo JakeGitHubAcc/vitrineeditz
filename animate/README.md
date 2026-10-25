@@ -10,6 +10,9 @@ name and artist, and this:
   are moved along the clip's optical flow (`motion.py`), so its colors and detail stay its own. The
   camera's part of the motion is taken out and the rest softened and capped; text does not move and
   faces move only as a whole. The end turns back along the motion, so the clip ends on its first frame;
+- cuts a crowd's people out, each on their own, and has each sway slowly from where they stand and
+  breathe, over the background painted in behind them (`crowd.py`); the main person, larger, still only
+  breathes;
 - paints the cover on a little above and below it and fades that into a smooth blur (`frame.py`);
 - does what the phone's **Text on animated covers** and **Camera sway** settings ask (`effects.py`): the
   text kept still, faded out and back in over the loop, or painted out, and a slow, slight sway of the
@@ -35,6 +38,8 @@ In one folder (`D:\VitrineAnimate` unless `VITRINE_ANIMATE` says otherwise):
 - `models/big-lama.pt`, from the release `add_big_lama` of Sanster/models on GitHub
 - `models/face_detection_yunet_2023mar.onnx`, from opencv/opencv_zoo on GitHub
   (`models/face_detection_yunet`)
+- `models/maskrcnn_resnet50_fpn_v2_coco-73cbd019.pth`, torchvision's Mask R-CNN v2 weights, from
+  `https://download.pytorch.org/models/maskrcnn_resnet50_fpn_v2_coco-73cbd019.pth`
 - the label finder's OCR in ComfyUI's Python:
   `ComfyUI_windows_portable\python_embeded\python.exe -m pip install rapidocr_onnxruntime`
 
@@ -52,5 +57,5 @@ To leave labels on, add `--keep-labels` to the command in `start.bat`.
 
 Only requests from the home network are answered. The covers' album and artist names go to Apple's
 iTunes Search API to find a clean copy. Settings are at the top of each file: the model's size, length and
-prompt in `vitrine_animate.py`, how much things move and the grain in `motion.py`, and the edges' blur
+prompt in `vitrine_animate.py`, how much things move and the grain in `motion.py`, how a crowd sways in `crowd.py`, and the edges' blur
 in `frame.py`. The graph ComfyUI runs is `workflow.json`.
