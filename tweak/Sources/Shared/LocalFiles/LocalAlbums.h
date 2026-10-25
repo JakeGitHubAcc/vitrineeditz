@@ -8,8 +8,9 @@
 // differ from AudioToolbox's by a second, and a URI the player reported for the same names is Spotify's own.
 // The user's Edit info names (LocalFiles.h) are what the albums are gathered and shown by.
 //
-// Playing an album puts its tracks in the queue and skips to the first: Spotify's player has no context of
-// local tracks the mod can start, so the album plays from the queue, and what was playing goes on after it.
+// Playing an album plays it as a context of its own, named by the album, as Spotify plays an album. Where the
+// player does not go to it, its tracks are put in the queue and skipped to instead: the album then plays from
+// the queue, and what was playing goes on after it.
 //
 // Threading: main thread, but for the scan, which runs on a queue of its own and reports on main.
 #import <UIKit/UIKit.h>
