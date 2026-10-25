@@ -8,7 +8,8 @@ and artist; this server queues it and makes its loop:
 2. what moves: Wan 2.2 TI2V-5B in ComfyUI (workflow.json) animates the cover, and the optical flow of its
    frames, softened, with text and faces held, moves the cover's own pixels (motion.py), so its colors,
    detail and faces stay its own; the end turns back along the motion to the first frame; people are
-   each cut out and move whole, a crowd swaying and anyone else only breathing (crowd.py), curtains sway as fabric and solid things (a stage, a
+   each cut out and move whole, a crowd swaying and anyone else only breathing (crowd.py), and so do
+   things that move on their own: bees and birds hover, clouds drift, flowers nod, trees bend (props.py), curtains sway as fabric and solid things (a stage, a
    floor, walls) keep their shape (scene.py);
 3. the lock screen's 3:4 frame around it (frame.py); what the phone's Text and Camera sway settings ask
    for, a starfield's drift, glints on shiny things and a slow shift of the light (effects.py); and a
@@ -54,6 +55,7 @@ import crowd  # noqa: E402
 import effects  # noqa: E402
 import label  # noqa: E402
 import motion  # noqa: E402
+import props  # noqa: E402
 import scene  # noqa: E402
 from frame import OUT_H, OUT_W, Extended, shown as shown_cover  # noqa: E402
 
@@ -289,7 +291,7 @@ def clean_cover(cover, names, lama, keep_labels):
     return cover, lines
 
 
-def work(jobs, comfy, lama, faces, keep_labels, persons=None, scenes=None):
+def work(jobs, comfy, lama, faces, keep_labels, persons=None, scenes=None, finders=None):
     inputs = os.path.join(comfy.root, "ComfyUI", "input")
     while True:
         key, png, names = jobs.next()
@@ -322,15 +324,21 @@ def work(jobs, comfy, lama, faces, keep_labels, persons=None, scenes=None):
             stars = effects.starfield(base, covered)
             sky = stars[2] if stars else np.zeros((side, side), np.float32)
             # People move as layers of their own over what is painted in behind them.
-            audience = crowd.Crowd(base, persons, [] if wording == "hide" else text, lama, int(key[:8], 16))
-            shiny = effects.glints(base, np.maximum(np.maximum(covered, sky), audience.mask))
+            words = [] if wording == "hide" else text
+            audience = crowd.Crowd(base, persons, words, lama, int(key[:8], 16))
+            # Things that move on their own, each cut out; what bends sways in place, as curtains do.
+            things = props.Props(audience.plate, finders, audience.anyone, words, lama, int(key[16:24] or "5", 16))
+            cut_out = np.maximum(audience.mask, things.mask)
+            shiny = effects.glints(base, np.maximum(np.maximum(covered, sky), cut_out))
             # Curtains sway on their own, around the text and people; solid things keep their shape.
             kinds = scene.Scene(base, scenes)
             keep = np.maximum((covered > 0).astype(np.float32), audience.anyone)
-            drapes = scene.Curtains(audience.plate, kinds, keep, lama, int(key[8:16], 16))
-            base = drapes.plate
+            drapes = scene.Curtains(things.plate, kinds.of({scene.CURTAIN}) > 0.5, keep, lama, int(key[8:16], 16))
+            trees = scene.Curtains(drapes.plate, things.bend, keep, lama, int(key[24:32] or "7", 16), stand=True)
+            base = trees.plate
+            found = ", ".join(f"{n} {k}" for k, n in sorted(things.count.items())) or "nothing else that moves"
             say(f"{'a starfield' if stars else 'no starfield'}, {len(audience.people)} people ({audience.crowd} in a crowd), "
-                f"{'curtains' if drapes.mask.any() else 'no curtains'}, {len(shiny)} glints")
+                f"{'curtains' if drapes.mask.any() else 'no curtains'}, {found}, {len(shiny)} glints")
             seed = int(key[:12], 16) % (2 ** 31) + random.randint(0, 999)
             frames = comfy.run(image_name, seed)
             pictures = [np.asarray(Image.open(f).convert("RGB"), dtype=np.float32) for f in frames]
@@ -341,7 +349,7 @@ def work(jobs, comfy, lama, faces, keep_labels, persons=None, scenes=None):
             still_sky = np.maximum(still_sky, cv2.GaussianBlur(still_sky, (0, 0), SKY_EASE))
             # Behind people nothing moves but the people laid over it, and the model never moves one, even
             # one left out of the layers (one over the text).
-            behind = cv2.resize(np.maximum(audience.mask, audience.anyone), (motion.FLOW_SIZE, motion.FLOW_SIZE), interpolation=cv2.INTER_AREA)
+            behind = cv2.resize(np.maximum(np.maximum(cut_out, audience.anyone), trees.mask), (motion.FLOW_SIZE, motion.FLOW_SIZE), interpolation=cv2.INTER_AREA)
             behind = np.maximum(behind, cv2.GaussianBlur(behind, (0, 0), SKY_EASE))
             still_sky = np.maximum(still_sky, np.clip(behind * 2, 0, 1))
             # Nor do the curtains, and the model's motion is held off solid things.
@@ -361,8 +369,11 @@ def work(jobs, comfy, lama, faces, keep_labels, persons=None, scenes=None):
                 cover_frame = motion.warped(base, step)
                 if stars:
                     cover_frame = effects.with_stars(cover_frame, stars, i, n)
+                cover_frame = things.over(cover_frame, i, n, front=False)
                 cover_frame = drapes.over(cover_frame, i, n)
+                cover_frame = trees.over(cover_frame, i, n)
                 cover_frame = audience.over(cover_frame, i, n)
+                cover_frame = things.over(cover_frame, i, n, front=True)
                 if wording == "fade":
                     cover_frame = effects.faded(cover_frame, still, where, effects.shown_text(i, n))
                 frame = extended.frame(cover_frame)
@@ -477,6 +488,7 @@ def main():
     parser.add_argument("--faces", help="face_detection_yunet_2023mar.onnx, which finds faces to keep whole")
     parser.add_argument("--people", help="maskrcnn_resnet50_fpn_v2_coco-73cbd019.pth, which finds a crowd's people to move whole")
     parser.add_argument("--scene", help="the segformer-b5-ade folder, which finds curtains and what keeps its shape")
+    parser.add_argument("--props", help="the folder holding grounding-dino-base and sam-vit-base, which find bees, clouds, flowers and trees to move")
     parser.add_argument("--keep-labels", action="store_true", help="leave Parental Advisory labels on covers")
     args = parser.parse_args()
     os.makedirs(args.clips, exist_ok=True)
@@ -492,10 +504,13 @@ def main():
     scenes = args.scene if args.scene and os.path.isdir(args.scene) else None
     if not scenes:
         print(f"No scene model at {args.scene}: curtains and solid things move with the model's motion (see README.md).")
+    finders = args.props if args.props and os.path.isdir(os.path.join(args.props, "sam-vit-base")) else None
+    if not finders:
+        print(f"No prop models in {args.props}: bees, clouds, flowers and trees move with the model's motion (see README.md).")
     jobs = Jobs(args.clips)
     comfy = Comfy(args.comfy, args.comfy_port)
     comfy.start()
-    threading.Thread(target=work, args=(jobs, comfy, lama, faces, args.keep_labels, persons, scenes), daemon=True).start()
+    threading.Thread(target=work, args=(jobs, comfy, lama, faces, args.keep_labels, persons, scenes, finders), daemon=True).start()
     server = ThreadingHTTPServer((args.host, args.port), handler(jobs))
     print()
     print(f"Vitrine Animate is running. In Vitrine's lock screen settings, set Computer to:  {lan_address()}:{args.port}")
