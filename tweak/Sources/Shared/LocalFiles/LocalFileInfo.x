@@ -50,12 +50,16 @@ static NSDictionary *withEdit(NSDictionary *metadata, NSString *uri) {
 // Queue; while one of its tracks plays, the header names the album instead. The header's label is the one in the
 // row with the player's close button. Main thread only: UILabel is set there.
 static NSString *sg_rawTitle, *sg_shownTitle, *sg_rawArtist, *sg_shownArtist;
-static NSString *const kPlayerArtist = @"now-playing-subtitle-label", *const kPlayerClose = @"now-playing-minimize-button";
+static NSString *const kPlayerArtist = @"now-playing-subtitle-label";
+// The close button goes by either name (Redesigned/Player/PlayerHeader.x).
+static NSString *const kPlayerClose = @"now-playing-minimize-button", *const kPlayerCloseOld = @"mobile-nowplaying-close-button";
 // The album the header names now, nil when none; the header's label; and what Spotify had it say.
 static NSString *sg_headerTitle, *sg_headerWord;
 static __weak UILabel *sg_headerLabel;
-// The most a row the header's label shares with the close button can be, in points.
-static const CGFloat kHeaderRow = 90;
+// The most a row the header's label shares with the close button can be, in points, and how many views up from
+// the label it is looked for.
+static const CGFloat kHeaderRow = 140;
+static const NSUInteger kHeaderDepth = 5;
 
 static BOOL inPlayerArtist(UIView *label) {
     UIView *v = label;
@@ -69,10 +73,11 @@ static BOOL inPlayerArtist(UIView *label) {
 static BOOL inPlayerHeader(UILabel *label) {
     if (label == sg_headerLabel) return YES;
     UIView *row = label.superview;
-    for (NSUInteger i = 0; row && i < 3 && row.bounds.size.height <= kHeaderRow; i++, row = row.superview) {
+    for (NSUInteger i = 0; row && i < kHeaderDepth && row.bounds.size.height <= kHeaderRow; i++, row = row.superview) {
         __block BOOL close = NO;
         SGForEachView(row, ^(UIView *view) {
-            if (!close && [view.accessibilityIdentifier isEqualToString:kPlayerClose]) close = YES;
+            NSString *name = view.accessibilityIdentifier;
+            if (!close && ([name isEqualToString:kPlayerClose] || [name isEqualToString:kPlayerCloseOld])) close = YES;
         });
         if (close) {
             sg_headerLabel = label;
@@ -108,6 +113,30 @@ static void setAgain(UILabel *label, NSString *text) {
 
 // Labels set before the player's state said the track changed are put right once it has, and a header that named
 // an album no longer playing says again what Spotify had it say.
+// The header's label found from the close button down: in the short row around it, the label nearest the middle.
+static void findHeaderFrom(UIView *close) {
+    UIView *row = close.superview;
+    for (NSUInteger i = 0; row && i < kHeaderDepth && row.bounds.size.height <= kHeaderRow; i++, row = row.superview) {
+        __block UILabel *best = nil;
+        __block CGFloat nearest = CGFLOAT_MAX;
+        CGFloat middle = row.bounds.size.width / 2;
+        SGForEachView(row, ^(UIView *view) {
+            if (![view isKindOfClass:UILabel.class] || !((UILabel *)view).text.length || view.hidden || view.alpha < 0.01) return;
+            CGFloat off = fabs([view convertPoint:CGPointMake(view.bounds.size.width / 2, 0) toView:row].x - middle);
+            if (off < nearest) {
+                nearest = off;
+                best = (UILabel *)view;
+            }
+        });
+        if (best) {
+            sg_headerLabel = best;
+            static dispatch_once_t once;
+            dispatch_once(&once, ^{ SGLog(@"local files: the player's header is %@ \"%@\"", NSStringFromClass(best.class), best.text); });
+            return;
+        }
+    }
+}
+
 static void recreditLabels(void) {
     UILabel *header = sg_headerLabel;
     if (header && !sg_headerTitle && sg_headerWord && ![header.text isEqualToString:sg_headerWord]) setAgain(header, sg_headerWord);
@@ -116,18 +145,26 @@ static void recreditLabels(void) {
         if (![scene isKindOfClass:UIWindowScene.class]) continue;
         for (UIWindow *window in ((UIWindowScene *)scene).windows) {
             SGForEachView(window, ^(UIView *view) {
+                NSString *name = view.accessibilityIdentifier;
+                if (sg_headerTitle && !sg_headerLabel.window && ([name isEqualToString:kPlayerClose] || [name isEqualToString:kPlayerCloseOld])) {
+                    findHeaderFrom(view);
+                }
                 if (![view isKindOfClass:UILabel.class]) return;
                 UILabel *label = (UILabel *)view;
                 if (credited(label, label.text)) setAgain(label, label.text);
             });
         }
     }
+    // A header found from the close button after its label was passed in the walk above.
+    UILabel *found = sg_headerLabel;
+    if (sg_headerTitle && found && ![found.text isEqualToString:sg_headerTitle] && credited(found, found.text)) setAgain(found, found.text);
 }
 
 static void artistLinesNow(void);
 
+static void showGlyphsAgain(void);
+
 static void creditPlaying(NSString *uri) {
-    artistLinesNow();
     NSString *album = SGLocalAlbumPlayingTitle();
     if (!album && sg_headerTitle) {
         // The header said the album's title; it goes back to Spotify's word below.
@@ -148,8 +185,13 @@ static void creditPlaying(NSString *uri) {
     } else {
         sg_rawTitle = sg_shownTitle = sg_rawArtist = sg_shownArtist = nil;
     }
+    if (!sg_headerTitle) showGlyphsAgain();
     recreditLabels();
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.4 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ recreditLabels(); });
+    artistLinesNow();
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.4 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        recreditLabels();
+        artistLinesNow();
+    });
 }
 
 void SGLocalFilesRecredit(void) {
@@ -182,12 +224,57 @@ static char kArtistTapKey;
 }
 @end
 
+// The glyph before the artist that says the track plays from the queue goes while a local album played from its
+// page plays (the header names the album then), and the artist moves into its place. It is the small view that
+// ends before the artist line in the row they share, the line or the view wrapping it; Spotify's own are put
+// back once the album is over.
+static NSHashTable<UIView *> *sg_hiddenGlyphs;
+static NSHashTable<UIView *> *sg_movedLines;
+static const CGFloat kGlyphLargest = 32;
+
+static void showGlyphsAgain(void) {
+    for (UIView *glyph in sg_hiddenGlyphs.allObjects) glyph.alpha = 1;
+    for (UIView *line in sg_movedLines.allObjects) line.transform = CGAffineTransformIdentity;
+    [sg_hiddenGlyphs removeAllObjects];
+    [sg_movedLines removeAllObjects];
+}
+
+static void hideQueueGlyph(UIView *line) {
+    if (!sg_headerTitle) return;
+    if (!sg_hiddenGlyphs) {
+        sg_hiddenGlyphs = [NSHashTable weakObjectsHashTable];
+        sg_movedLines = [NSHashTable weakObjectsHashTable];
+    }
+    UIView *level = line;
+    for (NSUInteger i = 0; level.superview && i < 2; i++, level = level.superview) {
+        // Where the line starts, from its center, which a transform does not move.
+        CGFloat start = level.center.x - level.bounds.size.width / 2;
+        UIView *glyph = nil;
+        for (UIView *sub in level.superview.subviews) {
+            if (sub == level || [sg_movedLines containsObject:sub]) continue;
+            CGSize size = sub.bounds.size;
+            CGFloat end = sub.center.x + size.width / 2;
+            if (end <= start + 1 && size.width > 2 && size.width <= kGlyphLargest && size.height <= kGlyphLargest) glyph = sub;
+        }
+        if (!glyph) continue;
+        if (glyph.alpha != 0) glyph.alpha = 0;
+        [sg_hiddenGlyphs addObject:glyph];
+        CGAffineTransform move = CGAffineTransformMakeTranslation((glyph.center.x - glyph.bounds.size.width / 2) - start, 0);
+        if (!CGAffineTransformEqualToTransform(level.transform, move)) level.transform = move;
+        [sg_movedLines addObject:level];
+        static dispatch_once_t once;
+        dispatch_once(&once, ^{ SGLog(@"local files: the queue glyph %@ before the player's artist hidden", NSStringFromClass(glyph.class)); });
+        return;
+    }
+}
+
 static void watchArtistTap(UIView *label) {
     static SGLocalArtistTap *tap;
     if (!tap) tap = [SGLocalArtistTap new];
     UIView *line = label;
     for (NSUInteger i = 0; line && i < 4 && ![line.accessibilityIdentifier isEqualToString:kPlayerArtist]; i++) line = line.superview;
     if (![line.accessibilityIdentifier isEqualToString:kPlayerArtist]) return;
+    hideQueueGlyph(line);
     UIView *host = line;
     while (host && !host.userInteractionEnabled) host = host.superview;
     if (!host || objc_getAssociatedObject(host, &kArtistTapKey)) return;
@@ -214,7 +301,17 @@ static void artistLinesNow(void) {
 
 // Every label the player sets while a local file plays is looked at, a few views up, for the artist line.
 static void artistLineSet(UILabel *label) {
-    if (sg_playingLocal && NSThread.isMainThread && inPlayerArtist(label)) watchArtistTap(label);
+    if (!sg_playingLocal || !NSThread.isMainThread || !inPlayerArtist(label)) return;
+    watchArtistTap(label);
+    // A player just opened sets its artist line; its header, set before it was in a window, is found once it is.
+    static BOOL asked;
+    if (sg_headerTitle && !sg_headerLabel.window && !asked) {
+        asked = YES;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            asked = NO;
+            recreditLabels();
+        });
+    }
 }
 
 #pragma mark - the system's now playing artwork
