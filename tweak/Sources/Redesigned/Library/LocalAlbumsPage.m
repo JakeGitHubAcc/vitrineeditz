@@ -93,8 +93,10 @@ static UIImageView *coverView(CGFloat radius) {
     self.hidden = !album;
     if (!album) return;
     _title.text = album.title;
-    _artist.text = album.artist;
-    self.accessibilityLabel = [NSString stringWithFormat:@"%@, %@", album.title, album.artist];
+    // The kind and the artist, as Your Library lists a release ("EP · Eminem").
+    NSString *type = SGLocalAlbumTypeName(SGLocalAlbumShownType(album));
+    _artist.text = [NSString stringWithFormat:@"%@ · %@", type, album.artist];
+    self.accessibilityLabel = [NSString stringWithFormat:@"%@, %@, %@", album.title, type, album.artist];
     showCover(_cover, album, self.bounds.size.width ?: 180);
 }
 
