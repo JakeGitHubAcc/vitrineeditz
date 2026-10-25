@@ -207,9 +207,15 @@ static UIImageView *coverView(CGFloat radius) {
         [choices addObject:choice];
     }
     UIMenu *sortBy = [UIMenu menuWithTitle:@"Sort By" image:nil identifier:nil options:UIMenuOptionsDisplayInline children:choices];
-    self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithImage:[UIImage systemImageNamed:@"arrow.up.arrow.down"]
-                                                                               menu:[UIMenu menuWithChildren:@[sortBy]]];
-    self.navigationItem.rightBarButtonItem.accessibilityLabel = @"Sort By";
+    UIBarButtonItem *sort = [[UIBarButtonItem alloc] initWithImage:[UIImage systemImageNamed:@"arrow.up.arrow.down"]
+                                                              menu:[UIMenu menuWithChildren:@[sortBy]]];
+    sort.accessibilityLabel = @"Sort By";
+    UIBarButtonItem *add = [[UIBarButtonItem alloc] initWithPrimaryAction:[UIAction actionWithTitle:@"Add from Google Drive"
+        image:[UIImage systemImageNamed:@"plus"] identifier:nil handler:^(UIAction *action) {
+            SGRLocalAlbumsPage *page = weakSelf;
+            if (page) SGRAskDriveImport(page);
+        }]];
+    self.navigationItem.rightBarButtonItems = @[sort, add];
 }
 
 - (void)rescan:(UIRefreshControl *)refresh {
