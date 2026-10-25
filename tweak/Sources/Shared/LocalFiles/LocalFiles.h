@@ -60,6 +60,11 @@ NSString *SGLocalFileCoverInURL(NSString *url);
 // Posted on the main thread after an edit is stored or forgotten, object the URI.
 extern NSNotificationName const SGLocalFileEditsDidChangeNotification;
 
+// LocalFileInfo.x: the player's labels named again for the track playing now (a title's guests credited, the
+// header naming a local album played from its page), for when what they show changed with no change of track.
+// Main thread.
+void SGLocalFilesRecredit(void);
+
 // EditInfoMenu.x: the editor for a local file, presented over `presenter`.
 void SGLocalFilePresentEditor(UIViewController *presenter, NSString *uri);
 

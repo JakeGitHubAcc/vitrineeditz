@@ -8,9 +8,9 @@
 // differ from AudioToolbox's by a second, and a URI the player reported for the same names is Spotify's own.
 // The user's Edit info names (LocalFiles.h) are what the albums are gathered and shown by.
 //
-// Playing an album plays it as a context of its own, named by the album, as Spotify plays an album. Where the
-// player does not go to it, its tracks are put in the queue and skipped to instead: the album then plays from
-// the queue, and what was playing goes on after it.
+// Playing an album puts its tracks in the queue and skips to the first: the album plays from the queue, and what
+// was playing goes on after it. The player's header, which then says Queue, names the album while it plays
+// (LocalFileInfo.x). A context of its own (+[SPTPlayerContext contextWithTracks:]) stopped the player, 9.1.94.
 //
 // Threading: main thread, but for the scan, which runs on a queue of its own and reports on main.
 #import <UIKit/UIKit.h>
@@ -57,3 +57,5 @@ SGLocalAlbum *SGLocalAlbumOfTrack(NSString *uri);
 void SGLocalAlbumCover(SGLocalAlbum *album, CGFloat side, void (^done)(UIImage *cover));
 // Plays the album from its track at `from`, or its tracks shuffled; `done` on main with what went wrong.
 void SGLocalAlbumPlay(SGLocalAlbum *album, NSUInteger from, BOOL shuffle, void (^done)(NSString *error));
+// The title of the album last played from its page while one of its tracks is playing, else nil. Main thread.
+NSString *SGLocalAlbumPlayingTitle(void);
