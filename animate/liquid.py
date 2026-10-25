@@ -14,7 +14,7 @@ import math
 
 import cv2
 import numpy as np
-from scipy.ndimage import binary_closing, binary_fill_holes, gaussian_filter, gaussian_filter1d
+from scipy.ndimage import binary_closing, binary_dilation, binary_fill_holes, gaussian_filter, gaussian_filter1d
 from scipy.ndimage import label as components
 
 import props
@@ -45,7 +45,7 @@ WATER_SURE, WATER_LEAST, WATER_SOFT = 0.5, 0.02, 3
 # The sea's surface: its tile's cells and size in metres, the wind's speed (m/s) and direction (radians, 0 across),
 # the smallest wave kept (m), how many times the tile repeats across the cover's width at the bottom, how much the
 # plane is stretched away from the eye, and how fast the waves go against deep water's own speed.
-SEA_N, SEA_SIZE, SEA_SPEED, SEA_WIND, SEA_SMALLEST, SEA_TILES, SEA_STRETCH, SEA_PACE = 256, 30.0, 7.0, 1.2, 0.02, 3.5, 0.45, 0.35
+SEA_N, SEA_SIZE, SEA_SPEED, SEA_WIND, SEA_SMALLEST, SEA_TILES, SEA_STRETCH, SEA_PACE = 256, 30.0, 7.0, 1.2, 0.02, 3.5, 0.45, 0.7
 # How far the water's own detail is smoothed (a share of the side), how high the eye is over the plane (how flat the
 # view is), how much a slope turns the light, the water's reflectance head on (Schlick's F0), how strongly the
 # reflection and a ripple's own light and shade change the water, where a glint starts (in the ripples' spreads)
@@ -59,6 +59,9 @@ SEA_ROW_LEAST = 8
 SEA_AMOUNT, SEA_RIPPLE, SEA_SHINE, SEA_GLINT, WAVE_HORIZON, SEA_EDGE = 0.5, 0.5, 1.2, 0.14, 0.12, 0.5
 # How far around faces and text, and in from the cover's top and bottom, the waves ease off, as shares of the side.
 KEEP_EASE, EDGE_EASE = 0.03, 0.06
+# The sea's own: a shorter ease at the cover's top and bottom (the old water showed under a long one), and how far
+# toward the cover's edges the water is grown over what its outline left short (shares of the side).
+SEA_EDGE_EASE, SEA_GROW = 0.015, 0.04
 
 
 def water_found(cover, path, keep):
@@ -90,10 +93,26 @@ def smooth_ramp(x):
     return x * x * (3 - 2 * x)
 
 
-def edge_ease(side):
-    """1 inside, falling to 0 at the cover's top and bottom, where the still blur drawn out from them meets it."""
+def edge_ease(side, ease=EDGE_EASE):
+    """1 inside, falling to 0 at the cover's top and bottom over `ease` of the side, where the still blur drawn out
+    from them meets it."""
     y = np.arange(side, dtype=np.float32)
-    return smooth_ramp(np.minimum(y, side - 1 - y) / (EDGE_EASE * side))[:, None]
+    return smooth_ramp(np.minimum(y, side - 1 - y) / (ease * side))[:, None]
+
+
+def to_the_edge(cover, water):
+    """`water` (bool) grown over the strip its outline left short of it toward the cover's edges, where the old water
+    showed between the sea and a cover's border (To the Stars' torn edge): over pixels as dark as the water only, so
+    a light border stays its own."""
+    side = water.shape[0]
+    gray = cover.mean(axis=2)
+    most = np.percentile(gray[water], 95) if water.any() else 0
+    near = binary_dilation(water, iterations=max(1, int(round(SEA_GROW * side))))
+    grown = water | (near & (gaussian_filter(gray, 1.5) <= most))
+    # Only what joins the water, not some dark thing near it.
+    parts, _ = components(grown)
+    keep = np.unique(parts[water])
+    return np.isin(parts, keep[keep > 0])
 
 
 class Drips:
@@ -211,9 +230,10 @@ class Waves:
         self.mask = np.zeros((side, side), np.float32)
         if water.mean() < WATER_LEAST:
             return
-        mask = np.clip(gaussian_filter(water.astype(np.float32), WATER_SOFT), 0, 1)
+        water = to_the_edge(cover, (water > 0.5) & (keep < 0.5)).astype(np.float32)
+        mask = np.clip(gaussian_filter(water, WATER_SOFT), 0, 1)
         mask *= 1 - np.clip(gaussian_filter(keep.astype(np.float32), KEEP_EASE * side) * 2, 0, 1)
-        mask *= edge_ease(side)
+        mask *= edge_ease(side, SEA_EDGE_EASE)
         ys = np.nonzero(water.max(axis=1) > 0.5)[0]
         if not len(ys):
             return
