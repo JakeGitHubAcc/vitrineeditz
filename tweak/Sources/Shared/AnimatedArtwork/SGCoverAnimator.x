@@ -270,7 +270,7 @@ void SGAnimatedCoverRequest(NSString *picture, NSString *album, NSString *artist
     NSMutableDictionary *names = [NSMutableDictionary dictionary];
     if (album.length) names[@"album"] = album;
     if (artist.length) names[@"artist"] = artist;
-    names[@"text"] = @[@"keep", @"fade", @"hide"][(NSUInteger)MIN(MAX(SGInt(SGKeyAnimateText, SGAnimateTextKeep), 0), 2)];
+    names[@"text"] = @[@"keep", @"fade", @"hide", @"spray"][(NSUInteger)MIN(MAX(SGInt(SGKeyAnimateText, SGAnimateTextKeep), 0), 3)];
     names[@"sway"] = SGHidden(SGKeyAnimateSway) ? @"1" : @"0";   // an option row: off until switched on
     [names writeToURL:namesFor(key) error:nil];
     setPending(key, album ?: @"");

@@ -21,6 +21,9 @@ WORDS = ("fog", "smoke", "mist", "haze")
 # What is haze inside a find: at most this saturation, at least this brightness (0 to 1), and smoother than
 # this (the gray's local deviation, levels out of 255, over SMOOTH_SIZE of the side).
 HAZE_SATURATION, HAZE_LEAST, HAZE_SMOOTH, SMOOTH_SIZE = 0.3, 0.1, 18.0, 0.006
+# Nor what is near white, where the smoke's gray only showed as blotches (+44's, Make Yourself's glow); and the
+# finder's least score, which a white ground or a glow could pass at the props' 0.3.
+HAZE_MOST, FOG_SCORE = 0.88, 0.4
 # The haze's soft edge as a share of the side, and the least share of the cover it must be.
 HAZE_SOFT, HAZE_LEAST_SHARE = 0.02, 0.01
 # The most the smoke thickens toward the haze's color, how far the billows reach from their mean, and how much
@@ -53,7 +56,7 @@ def slid(noise, dx, dy):
 
 def found(cover, path):
     """The finder's boxes, in pixels, for haze in `cover` (RGB uint8, square)."""
-    return [box for box, name, _ in props.named(cover, path, WORDS) if any(w in name for w in WORDS)]
+    return [box for box, name, _ in props.named(cover, path, WORDS, FOG_SCORE) if any(w in name for w in WORDS)]
 
 
 class Fog:
@@ -77,7 +80,7 @@ class Fog:
         gray = cv2.cvtColor(pixels, cv2.COLOR_RGB2GRAY).astype(np.float32)
         spread = SMOOTH_SIZE * side
         deviation = np.sqrt(np.maximum(gaussian_filter(gray ** 2, spread) - gaussian_filter(gray, spread) ** 2, 0))
-        haze = ((hsv[..., 1] <= HAZE_SATURATION) & (hsv[..., 2] >= HAZE_LEAST) & (deviation <= HAZE_SMOOTH)).astype(np.float32)
+        haze = ((hsv[..., 1] <= HAZE_SATURATION) & (hsv[..., 2] >= HAZE_LEAST) & (hsv[..., 2] <= HAZE_MOST) & (deviation <= HAZE_SMOOTH)).astype(np.float32)
         haze = np.clip(gaussian_filter(haze * where, HAZE_SOFT * side) * 1.5, 0, 1)
         haze *= 1 - np.clip(gaussian_filter(keep.astype(np.float32), KEEP_EASE * side) * 2, 0, 1)
         # None at the cover's top and bottom, where the still blur drawn out from them meets it: smoke up to the

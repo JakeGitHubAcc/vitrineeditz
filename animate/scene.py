@@ -29,7 +29,9 @@ SOLID = {
 CURTAIN = "curtain"
 # The only kinds the model's motion may move: what flows. Moving the rest bent whatever stood in it (a gravestone,
 # a speaker behind fog); what moves there moves as layers of its own (crowd.py, props.py, curtains, fog.py).
-FLUID = {"sky", "water", "sea", "river", "lake", "waterfall", "fountain", "swimming pool"}
+# Standing water is not among them: bent, a sea's waves looked strange (Tom DeLonge's To the Stars), so it takes
+# liquid.py's waves laid over it instead.
+FLUID = {"sky", "waterfall", "fountain"}
 # The fluid's soft edge in pixels, and the least share of the cover it must be for the model to run at all. The
 # motion is smoothed, so it reached a little past the sky's edge into the roofs and trees against it: it is kept
 # this share of the side inside the fluid, and only where the scene model is at least this sure of it.

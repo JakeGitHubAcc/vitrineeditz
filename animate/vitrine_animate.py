@@ -18,7 +18,7 @@ and artist; this server queues it and makes its loop:
 and keeps the MP4 in the clips folder, where the phone downloads it. One job runs at a time. Run it with
 ComfyUI's own Python (start.bat), which has everything it imports.
 
-    POST /animate?key=K&album=A&artist=R&text=keep|fade|hide&sway=0|1
+    POST /animate?key=K&album=A&artist=R&text=keep|fade|hide|spray&sway=0|1
                                        body: PNG -> {"state": "queued"|"running"|"done", "position": n}
                                                         (a cover sent again is animated again)
     GET  /status?key=K                    -> {"state": ..., "progress": 0..1, "position": n, "error": ...}
@@ -56,6 +56,7 @@ import catalog  # noqa: E402
 import crowd  # noqa: E402
 import effects  # noqa: E402
 import fog  # noqa: E402
+import liquid  # noqa: E402
 import label  # noqa: E402
 import motion  # noqa: E402
 import props  # noqa: E402
@@ -380,6 +381,8 @@ def work(jobs, comfy, lama, faces, keep_labels, persons=None, scenes=None, finde
             text = [tuple(v / cover.width for v in box) for _, score, box in lines if score > 0.5]
             people = [tuple(v / shown.width for v in box) for box in motion.faces(np.asarray(shown), faces)]
             wording = names.get("text", "keep") if text and lama else "keep"
+            if wording not in ("keep", "fade", "hide", "spray"):
+                wording = "keep"
             sway = names.get("sway") == "1"
             say(f"{len(text)} lines of text ({wording}), {len(people)} faces, {'a' if sway else 'no'} camera sway")
             # Hidden text is painted out of what moves; faded text is painted out under the text laid over it.
@@ -387,7 +390,8 @@ def work(jobs, comfy, lama, faces, keep_labels, persons=None, scenes=None, finde
             moving = erased if wording == "hide" else shown
             extended = Extended(erased if erased is not None else shown, lama)
             moving.resize((SIDE, SIDE), Image.LANCZOS).save(os.path.join(inputs, image_name))
-            base = np.asarray(erased if wording == "fade" else moving, dtype=np.float32)
+            # Faded or sprayed text is laid over a cover without it.
+            base = np.asarray(erased if wording in ("fade", "spray") else moving, dtype=np.float32)
             # What no effect may land on: text, its whole box, and faces.
             side = shown.width
             covered = np.zeros((side, side), np.float32)
@@ -418,10 +422,17 @@ def work(jobs, comfy, lama, faces, keep_labels, persons=None, scenes=None, finde
             # Fog and smoke drift as a smoke of their own laid over them, rather than being warped.
             progress(0.18, "finding fog and smoke")
             haze = fog.Fog(base, finders, covered, int(key[4:12], 16), FPS)
+            # Drips run, rather than being warped.
+            progress(0.19, "finding drips")
+            drips = liquid.Drips(base, finders, covered, int(key[6:14], 16), FPS)
             # Curtains sway on their own, around the text and people; solid things keep their shape.
             progress(0.20, "reading the scene (sky, water, curtains, solid things)")
             kinds = scene.Scene(base, scenes)
             keep = np.maximum((covered > 0).astype(np.float32), audience.anyone)
+            # Standing water stays still under waves laid over it in perspective.
+            water = kinds.of(liquid.WATER) * (kinds.sure >= liquid.WATER_SURE) if kinds.kinds is not None else np.zeros((side, side), np.float32)
+            water = np.maximum(water, liquid.water_found(base, finders, np.maximum(keep, cut_out)))
+            waves = liquid.Waves(water, np.maximum(keep, cut_out), int(key[10:18], 16), FPS)
             progress(0.23, "cutting out curtains and trees")
             drapes = scene.Curtains(things.plate, kinds.of({scene.CURTAIN}) > 0.5, keep, lama, int(key[8:16], 16))
             trees = scene.Curtains(drapes.plate, things.bend, keep, lama, int(key[24:32] or "7", 16), stand=True)
@@ -432,7 +443,8 @@ def work(jobs, comfy, lama, faces, keep_labels, persons=None, scenes=None, finde
             flowing = fluid is None or float(fluid.mean()) >= scene.FLUID_LEAST
             say(f"{'a starfield' if stars else 'no starfield'}, {len(audience.people)} people ({audience.crowd} in a crowd), "
                 f"{'curtains' if drapes.mask.any() else 'no curtains'}, {found}, {len(shiny)} glints "
-                f"({len(pieces)} jewelry), {'fog' if haze.mask.any() else 'no fog'}, "
+                f"({len(pieces)} jewelry), {'fog' if haze.mask.any() else 'no fog'}, {drips.count} drips, "
+                f"{'waves' if waves.mask.any() else 'no waves'}, "
                 f"{'the model moving ' + ('everything else' if fluid is None else f'{fluid.mean():.0%} sky and water') if flowing else 'no model motion'}")
             if flowing:
                 seed = int(key[:12], 16) % (2 ** 31) + random.randint(0, 999)
@@ -462,6 +474,7 @@ def work(jobs, comfy, lama, faces, keep_labels, persons=None, scenes=None, finde
             else:
                 steps = effects.lengthened([np.zeros((motion.FLOW_SIZE, motion.FLOW_SIZE, 2), np.float32)] * FRAMES)
             still = np.asarray(shown, dtype=np.float32)
+            sprayer = effects.Spray(where, int(key[:6], 16)) if wording == "spray" else None
             # The light leaves text alone, where it is in the frame, and eases off toward it; faces take it
             # as the rest does. A hard box here showed as a lighter or darker rectangle.
             boxes = np.zeros((OUT_H, OUT_W), np.float32)
@@ -474,6 +487,8 @@ def work(jobs, comfy, lama, faces, keep_labels, persons=None, scenes=None, finde
             for i, step in enumerate(steps):
                 progress(0.78 + 0.17 * i / n, f"drawing frame {i + 1} of {n}")
                 cover_frame = motion.warped(base, step)
+                cover_frame = drips.over(cover_frame, i, n)
+                cover_frame = waves.over(cover_frame, i, n)
                 if stars:
                     cover_frame = effects.with_stars(cover_frame, stars, i, n)
                 cover_frame = things.over(cover_frame, i, n, front=False)
@@ -484,6 +499,8 @@ def work(jobs, comfy, lama, faces, keep_labels, persons=None, scenes=None, finde
                 cover_frame = haze.over(cover_frame, i, n)
                 if wording == "fade":
                     cover_frame = effects.faded(cover_frame, still, where, effects.shown_text(i, n))
+                elif wording == "spray":
+                    cover_frame = effects.faded(cover_frame, still, where, sprayer.amount(effects.shown_text(i, n)))
                 frame = extended.frame(cover_frame)
                 # A glint rides on what it is on: a person it is on carries it, and a point of the cover shows
                 # where the flow brought it.

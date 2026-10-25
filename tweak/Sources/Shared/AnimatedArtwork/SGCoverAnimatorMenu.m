@@ -42,8 +42,8 @@ NSArray<UIMenuElement *> *SGAnimatedCoverMenu(NSString *picture, void (^send)(vo
         [actions addObject:make];
     }
 
-    NSArray<NSString *> *wordings = @[@"Keep", @"Fade In and Out", @"Hide"];
-    NSInteger chosen = MIN(MAX(SGInt(SGKeyAnimateText, SGAnimateTextKeep), 0), 2);
+    NSArray<NSString *> *wordings = @[@"Keep", @"Fade In and Out", @"Hide", @"Spray Off and On"];
+    NSInteger chosen = MIN(MAX(SGInt(SGKeyAnimateText, SGAnimateTextKeep), 0), (NSInteger)wordings.count - 1);
     NSMutableArray<UIMenuElement *> *picks = [NSMutableArray array];
     for (NSInteger i = 0; i < (NSInteger)wordings.count; i++) {
         UIAction *pick = [UIAction actionWithTitle:wordings[(NSUInteger)i] image:nil identifier:nil

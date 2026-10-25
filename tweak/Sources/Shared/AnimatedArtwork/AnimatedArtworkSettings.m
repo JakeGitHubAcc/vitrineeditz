@@ -98,9 +98,10 @@ NSArray *SGLockScreenMotionRows(void) {
         computer.visible = lowData.visible;
         SGModRow *text = SGChoiceRow(@"Text on animated covers", @"Keep holds the cover's text still. Fade lets it fade out "
                                                                   @"and back in over each loop, as some animated covers do. "
-                                                                  @"Hide paints it out. For covers animated from now on; "
-                                                                  @"Animate Again remakes one",
-                                     SGKeyAnimateText, @[@"Keep", @"Fade", @"Hide"], SGAnimateTextKeep);
+                                                                  @"Hide paints it out. Spray takes it off along a "
+                                                                  @"diagonal and sprays it back on, with a spray paint edge. "
+                                                                  @"For covers animated from now on; Animate Again remakes one",
+                                     SGKeyAnimateText, @[@"Keep", @"Fade", @"Hide", @"Spray"], SGAnimateTextKeep);
         text.visible = lowData.visible;
         SGModRow *sway = SGOptionRow(@"Camera sway", @"A slow, slight drift and push of the whole picture. For covers animated "
                                                      @"from now on", SGKeyAnimateSway);
