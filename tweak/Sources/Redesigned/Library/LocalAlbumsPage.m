@@ -468,7 +468,7 @@ static UIControl *rowSource(NSString *symbol, NSString *word, void (^tapped)(voi
 }
 
 - (void)showAlbum {
-    NSMutableArray<NSString *> *kind = [NSMutableArray arrayWithObject:@"Album"];
+    NSMutableArray<NSString *> *kind = [NSMutableArray arrayWithObject:SGLocalAlbumTypeName(SGLocalAlbumShownType(_album))];
     if (_album.year > 0) [kind addObject:[NSString stringWithFormat:@"%ld", (long)_album.year]];
     [_info showTitle:_album.title creator:_album.artist length:[kind componentsJoinedByString:@" · "] about:nil];
     [_info showShuffle:_shuffleSource play:_playSource trailing:_moreSource trailingFallback:[UIImage systemImageNamed:@"ellipsis"]
@@ -571,6 +571,34 @@ static UIControl *rowSource(NSString *symbol, NSString *word, void (^tapped)(voi
     [sheet addAction:[UIAlertAction actionWithTitle:@"Shuffle" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
         [weakSelf playFrom:0 shuffle:YES];
     }]];
+    NSString *type = [NSString stringWithFormat:@"Type: %@", SGLocalAlbumTypeName(SGLocalAlbumShownType(_album))];
+    [sheet addAction:[UIAlertAction actionWithTitle:type style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        [weakSelf showTypeMenu];
+    }]];
+    [sheet addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    sheet.popoverPresentationController.sourceView = self.view;
+    [self presentViewController:sheet animated:YES completion:nil];
+}
+
+// What kind of release the album is, as Spotify names its own; Automatic goes by its length (LocalAlbums.h).
+- (void)showTypeMenu {
+    UIAlertController *sheet = [UIAlertController alertControllerWithTitle:@"Album Type" message:nil preferredStyle:UIAlertControllerStyleActionSheet];
+    SGLocalAlbumType picked = SGLocalAlbumPickedType(_album);
+    SGLocalAlbum *album = _album;
+    for (SGLocalAlbumType type = SGLocalAlbumTypeAutomatic; type <= SGLocalAlbumTypeCompilation; type++) {
+        NSString *name = SGLocalAlbumTypeName(type);
+        if (type == SGLocalAlbumTypeAutomatic) name = [NSString stringWithFormat:@"Automatic (%@)", SGLocalAlbumTypeName(SGLocalAlbumGuessedType(album))];
+        UIAlertAction *choice = [UIAlertAction actionWithTitle:name style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+            SGLocalAlbumSetType(album, type);
+        }];
+        // The checkmark the system's own sheets give the current choice, through a key UIKit keeps private; a
+        // UIKit without it lists the types with none.
+        @try {
+            [choice setValue:@(type == picked) forKey:@"checked"];
+        } @catch (NSException *exception) {
+        }
+        [sheet addAction:choice];
+    }
     [sheet addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
     sheet.popoverPresentationController.sourceView = self.view;
     [self presentViewController:sheet animated:YES completion:nil];

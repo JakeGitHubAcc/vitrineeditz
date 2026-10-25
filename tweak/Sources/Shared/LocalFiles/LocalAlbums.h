@@ -59,3 +59,24 @@ void SGLocalAlbumCover(SGLocalAlbum *album, CGFloat side, void (^done)(UIImage *
 void SGLocalAlbumPlay(SGLocalAlbum *album, NSUInteger from, BOOL shuffle, void (^done)(NSString *error));
 // The title of the album last played from its page while one of its tracks is playing, else nil. Main thread.
 NSString *SGLocalAlbumPlayingTitle(void);
+
+// What kind of release an album is, as Spotify names its own: kept by album under SGKeyLocalAlbumTypes.
+#define SGKeyLocalAlbumTypes @"spotifyglass.localAlbums.types"
+typedef NS_ENUM(NSInteger, SGLocalAlbumType) {
+    SGLocalAlbumTypeAutomatic = 0,   // none picked: worked out by SGLocalAlbumGuessedType
+    SGLocalAlbumTypeAlbum,
+    SGLocalAlbumTypeSingle,
+    SGLocalAlbumTypeEP,
+    SGLocalAlbumTypeCompilation,
+};
+// The type picked for the album, Automatic when none was.
+SGLocalAlbumType SGLocalAlbumPickedType(SGLocalAlbum *album);
+// Spotify's rule for its own releases: Various Artists is a compilation; under 30 minutes, 1 to 3 tracks a
+// single and 4 to 6 an EP; anything else an album. Never Automatic.
+SGLocalAlbumType SGLocalAlbumGuessedType(SGLocalAlbum *album);
+// The type shown: the one picked, else the guess.
+SGLocalAlbumType SGLocalAlbumShownType(SGLocalAlbum *album);
+// Its name ("Album", "Single", "EP", "Compilation"; "Automatic").
+NSString *SGLocalAlbumTypeName(SGLocalAlbumType type);
+// Picks the album's type, Automatic forgetting the pick; posts SGLocalAlbumsDidChangeNotification. Main thread.
+void SGLocalAlbumSetType(SGLocalAlbum *album, SGLocalAlbumType type);

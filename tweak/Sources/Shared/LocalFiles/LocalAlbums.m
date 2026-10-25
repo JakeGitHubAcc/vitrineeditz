@@ -517,3 +517,46 @@ NSString *SGLocalAlbumPlayingTitle(void) {
     SGLocalAlbum *album = SGLocalAlbumOfTrack(SGURIString(SGPlayerState().track.URI));
     return [album.key isEqualToString:sg_playingKey] ? sg_playingTitle : nil;
 }
+
+#pragma mark - the album's type
+
+SGLocalAlbumType SGLocalAlbumPickedType(SGLocalAlbum *album) {
+    id types = [NSUserDefaults.standardUserDefaults dictionaryForKey:SGKeyLocalAlbumTypes];
+    id picked = album.key && [types isKindOfClass:NSDictionary.class] ? types[album.key] : nil;
+    NSInteger type = [picked isKindOfClass:NSNumber.class] ? [picked integerValue] : SGLocalAlbumTypeAutomatic;
+    return type >= SGLocalAlbumTypeAlbum && type <= SGLocalAlbumTypeCompilation ? (SGLocalAlbumType)type : SGLocalAlbumTypeAutomatic;
+}
+
+SGLocalAlbumType SGLocalAlbumGuessedType(SGLocalAlbum *album) {
+    if ([album.artist isEqualToString:@"Various Artists"]) return SGLocalAlbumTypeCompilation;
+    NSUInteger count = album.tracks.count;
+    if (album.seconds < 30 * 60 && count <= 3) return SGLocalAlbumTypeSingle;
+    if (album.seconds < 30 * 60 && count <= 6) return SGLocalAlbumTypeEP;
+    return SGLocalAlbumTypeAlbum;
+}
+
+SGLocalAlbumType SGLocalAlbumShownType(SGLocalAlbum *album) {
+    SGLocalAlbumType picked = SGLocalAlbumPickedType(album);
+    return picked != SGLocalAlbumTypeAutomatic ? picked : SGLocalAlbumGuessedType(album);
+}
+
+NSString *SGLocalAlbumTypeName(SGLocalAlbumType type) {
+    switch (type) {
+        case SGLocalAlbumTypeAutomatic: return @"Automatic";
+        case SGLocalAlbumTypeAlbum: return @"Album";
+        case SGLocalAlbumTypeSingle: return @"Single";
+        case SGLocalAlbumTypeEP: return @"EP";
+        case SGLocalAlbumTypeCompilation: return @"Compilation";
+    }
+    return @"Album";
+}
+
+void SGLocalAlbumSetType(SGLocalAlbum *album, SGLocalAlbumType type) {
+    if (!album.key) return;
+    NSMutableDictionary *types = [[NSUserDefaults.standardUserDefaults dictionaryForKey:SGKeyLocalAlbumTypes] mutableCopy] ?: [NSMutableDictionary dictionary];
+    if (type == SGLocalAlbumTypeAutomatic) [types removeObjectForKey:album.key];
+    else types[album.key] = @(type);
+    if (types.count) [NSUserDefaults.standardUserDefaults setObject:types forKey:SGKeyLocalAlbumTypes];
+    else [NSUserDefaults.standardUserDefaults removeObjectForKey:SGKeyLocalAlbumTypes];
+    [NSNotificationCenter.defaultCenter postNotificationName:SGLocalAlbumsDidChangeNotification object:nil];
+}
