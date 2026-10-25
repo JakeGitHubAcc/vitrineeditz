@@ -45,6 +45,17 @@ BOOL SGLocalFileSplitCredits(NSString *title, NSString *artist, NSString **bareT
 
 // The user's edit of a local file, nil when there is none. Safe from any thread.
 NSDictionary<NSString *, id> *SGLocalFileEditFor(NSString *uri);
+// Album-wide edits from Local Albums' page, on every one of `uris`: `album` (nil leaves the names; empty or the
+// file's own goes back to it) and `cover` (nil keeps each one's), written once and named by them all. Main thread.
+void SGLocalFilesSaveAlbum(NSArray<NSString *> *uris, NSString *album, UIImage *cover);
+
+// The files the user marked explicit, which Spotify's local files never are: the player and the lists show the
+// badge for them. Kept as an array of URIs. Read from any thread; set on main, which posts
+// SGLocalFileEditsDidChangeNotification.
+#define SGKeyLocalFileExplicit @"spotifyglass.localFiles.explicit"
+BOOL SGLocalFileExplicit(NSString *uri);
+void SGLocalFileSetExplicit(NSString *uri, BOOL marked);
+
 // Stores the names (an empty or missing one, or one the file already has, falls back to the file's
 // own) and a new cover when `cover` is set; `keepCover` NO drops the stored one. The file's own names
 // with no cover remove the edit. Main thread.

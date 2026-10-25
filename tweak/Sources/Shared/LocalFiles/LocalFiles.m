@@ -170,6 +170,46 @@ NSDictionary<NSString *, id> *SGLocalFileShown(NSString *uri) {
     return shown;
 }
 
+#pragma mark - explicit
+
+// The URIs marked explicit, swapped whole under the edits' lock: read on whatever thread Spotify reads metadata on.
+static NSSet<NSString *> *sg_explicit;
+
+static NSSet<NSString *> *explicitMarks(void) {
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        id stored = [NSUserDefaults.standardUserDefaults arrayForKey:SGKeyLocalFileExplicit];
+        os_unfair_lock_lock(&sg_lock);
+        sg_explicit = [NSSet setWithArray:[stored isKindOfClass:NSArray.class] ? stored : @[]];
+        os_unfair_lock_unlock(&sg_lock);
+    });
+    os_unfair_lock_lock(&sg_lock);
+    NSSet *marks = sg_explicit;
+    os_unfair_lock_unlock(&sg_lock);
+    return marks;
+}
+
+BOOL SGLocalFileExplicit(NSString *uri) {
+    if (!SGLocalFileIs(uri)) return NO;
+    NSRange mark = [uri rangeOfString:@"#" options:NSBackwardsSearch];
+    return [explicitMarks() containsObject:mark.location == NSNotFound ? uri : [uri substringToIndex:mark.location]];
+}
+
+static void changed(NSString *uri);
+
+void SGLocalFileSetExplicit(NSString *uri, BOOL marked) {
+    if (!SGLocalFileIs(uri) || SGLocalFileExplicit(uri) == marked) return;
+    NSMutableSet *marks = [explicitMarks() mutableCopy];
+    if (marked) [marks addObject:uri];
+    else [marks removeObject:uri];
+    os_unfair_lock_lock(&sg_lock);
+    sg_explicit = [marks copy];
+    os_unfair_lock_unlock(&sg_lock);
+    if (marks.count) [NSUserDefaults.standardUserDefaults setObject:marks.allObjects forKey:SGKeyLocalFileExplicit];
+    else [NSUserDefaults.standardUserDefaults removeObjectForKey:SGKeyLocalFileExplicit];
+    changed(uri);
+}
+
 #pragma mark - storing an edit
 
 NSString *SGLocalFileCoversDirectory(void) {
@@ -232,6 +272,19 @@ static NSString *writeCover(UIImage *image) {
     return name;
 }
 
+// The stored covers among `names` that no edit names any more, deleted. Several files share one an album's edit
+// gave them, so a cover goes only with the last file naming it.
+static void forgetCovers(NSSet<NSString *> *names, NSDictionary<NSString *, NSDictionary *> *edits) {
+    if (!names.count) return;
+    NSMutableSet<NSString *> *named = [NSMutableSet set];
+    for (NSDictionary *edit in edits.allValues) {
+        if ([edit isKindOfClass:NSDictionary.class] && [edit[@"cover"] isKindOfClass:NSString.class]) [named addObject:edit[@"cover"]];
+    }
+    for (NSString *name in names) {
+        if (![named containsObject:name]) [NSFileManager.defaultManager removeItemAtPath:[SGLocalFileCoversDirectory() stringByAppendingPathComponent:name] error:nil];
+    }
+}
+
 static void changed(NSString *uri) {
     [shownCache() removeAllObjects];
     [NSNotificationCenter.defaultCenter postNotificationName:SGLocalFileEditsDidChangeNotification object:uri];
@@ -249,7 +302,6 @@ void SGLocalFileSaveEdit(NSString *uri, NSDictionary<NSString *, NSString *> *na
     NSString *newCover = cover ? writeCover(cover) : nil;
     if (newCover) edit[@"cover"] = newCover;
     else if (keepCover && oldCover) edit[@"cover"] = old[@"cover"];
-    if (oldCover && ![edit[@"cover"] isEqual:old[@"cover"]]) [NSFileManager.defaultManager removeItemAtPath:oldCover error:nil];
 
     // The lyrics key changes with the names only: a cover alone leaves the lyrics where they are, and the
     // file's own names go back to the bare URI, whose lyrics may still be kept.
@@ -268,6 +320,38 @@ void SGLocalFileSaveEdit(NSString *uri, NSDictionary<NSString *, NSString *> *na
         [edits removeObjectForKey:uri];
     }
     storeEdits(edits);
+    if (oldCover && ![edit[@"cover"] isEqual:old[@"cover"]]) forgetCovers([NSSet setWithObject:old[@"cover"]], edits);
     SGLog(@"local files: %@ %@", uri, edit.count ? [NSString stringWithFormat:@"edited: %@", edit] : @"back to its own tags");
     changed(uri);
+}
+
+void SGLocalFilesSaveAlbum(NSArray<NSString *> *uris, NSString *album, UIImage *cover) {
+    NSString *name = [album stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    NSString *picture = cover ? writeCover(cover) : nil;
+    if (cover && !picture) return;
+    NSMutableDictionary *edits = [allEdits() mutableCopy];
+    NSMutableSet<NSString *> *replaced = [NSMutableSet set];
+    // One number for the whole album's rename: its tracks' lyrics are looked up again under their new keys.
+    NSNumber *number = @((long long)(NSDate.date.timeIntervalSince1970 * 1000));
+    for (NSString *uri in uris) {
+        if (!SGLocalFileIs(uri)) continue;
+        NSDictionary *tags = SGLocalFileTags(uri);
+        NSMutableDictionary<NSString *, id> *edit = [edits[uri] mutableCopy] ?: [NSMutableDictionary dictionary];
+        if (album) {
+            if (name.length && ![name isEqualToString:tags[@"album"]]) edit[@"album"] = name;
+            else [edit removeObjectForKey:@"album"];
+            if (edit[@"title"] || edit[@"artist"] || edit[@"album"]) edit[@"number"] = number;
+            else [edit removeObjectForKey:@"number"];
+        }
+        if (picture) {
+            if (edit[@"cover"]) [replaced addObject:edit[@"cover"]];
+            edit[@"cover"] = picture;
+        }
+        if (edit.count) edits[uri] = edit;
+        else [edits removeObjectForKey:uri];
+    }
+    storeEdits(edits);
+    forgetCovers(replaced, edits);
+    SGLog(@"local files: %lu files of an album edited%@%@", (unsigned long)uris.count, album ? @", renamed" : @"", picture ? @", a new cover" : @"");
+    for (NSString *uri in uris) changed(uri);
 }

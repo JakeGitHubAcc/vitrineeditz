@@ -25,8 +25,11 @@
 // The names are SGLocalFileShown's, so the guests a title names are credited as artists, edited or not.
 static NSDictionary *withEdit(NSDictionary *metadata, NSString *uri) {
     NSDictionary *edit = SGLocalFileEditFor(uri), *shown = SGLocalFileShown(uri);
-    if (!edit && ![shown[@"credited"] boolValue]) return metadata;
+    BOOL marked = SGLocalFileExplicit(uri);
+    if (!edit && !marked && ![shown[@"credited"] boolValue]) return metadata;
     NSMutableDictionary *edited = metadata ? [metadata mutableCopy] : [NSMutableDictionary dictionary];
+    // Marked explicit by the user: the key a Spotify track's explicit badge is read from.
+    if (marked) edited[@"is_explicit"] = @"true";
     if ([shown[@"title"] length]) edited[@"title"] = shown[@"title"];
     if ([shown[@"artist"] length]) edited[@"artist_name"] = shown[@"artist"];
     if ([edit[@"album"] length]) edited[@"album_title"] = edit[@"album"];
@@ -263,6 +266,19 @@ static void showGlyphsAgain(void) {
     [sg_movedLines removeAllObjects];
 }
 
+// Whether `view` writes any text: the explicit badge does ("E"), the queue glyph is a picture.
+static BOOL writes(UIView *view) {
+    __block BOOL found = NO;
+    SGForEachView(view, ^(UIView *sub) {
+        if (!found && [sub isKindOfClass:UILabel.class] && ((UILabel *)sub).text.length) found = YES;
+    });
+    return found;
+}
+
+static CGFloat leftOf(UIView *view) {
+    return view.center.x - view.bounds.size.width / 2;   // from its center, which a transform does not move
+}
+
 static void hideQueueGlyph(UIView *line) {
     if (!sg_headerTitle) return;
     if (!sg_hiddenGlyphs) {
@@ -271,21 +287,32 @@ static void hideQueueGlyph(UIView *line) {
     }
     UIView *level = line;
     for (NSUInteger i = 0; level.superview && i < 2; i++, level = level.superview) {
-        // Where the line starts, from its center, which a transform does not move.
-        CGFloat start = level.center.x - level.bounds.size.width / 2;
+        CGFloat start = leftOf(level);
         UIView *glyph = nil;
         for (UIView *sub in level.superview.subviews) {
             if (sub == level || [sg_movedLines containsObject:sub]) continue;
             CGSize size = sub.bounds.size;
             CGFloat end = sub.center.x + size.width / 2;
-            if (end <= start + 1 && size.width > 2 && size.width <= kGlyphLargest && size.height <= kGlyphLargest) glyph = sub;
+            if (end <= start + 1 && size.width > 2 && size.width <= kGlyphLargest && size.height <= kGlyphLargest && !writes(sub)) glyph = sub;
         }
         if (!glyph) continue;
         if (glyph.alpha != 0) glyph.alpha = 0;
         [sg_hiddenGlyphs addObject:glyph];
-        CGAffineTransform move = CGAffineTransformMakeTranslation((glyph.center.x - glyph.bounds.size.width / 2) - start, 0);
-        if (!CGAffineTransformEqualToTransform(level.transform, move)) level.transform = move;
-        [sg_movedLines addObject:level];
+        // What follows it on the line (an explicit badge, the artist) moves into its place together.
+        CGFloat from = leftOf(glyph), after = CGFLOAT_MAX;
+        NSMutableArray<UIView *> *following = [NSMutableArray array];
+        for (UIView *sub in level.superview.subviews) {
+            if (sub == glyph || sub.alpha < 0.01 || leftOf(sub) < from + glyph.bounds.size.width - 1) continue;
+            if (sub != level && sub.bounds.size.height > kGlyphLargest) continue;
+            [following addObject:sub];
+            after = MIN(after, leftOf(sub));
+        }
+        if (after == CGFLOAT_MAX) return;
+        CGAffineTransform move = CGAffineTransformMakeTranslation(from - after, 0);
+        for (UIView *sub in following) {
+            if (!CGAffineTransformEqualToTransform(sub.transform, move)) sub.transform = move;
+            [sg_movedLines addObject:sub];
+        }
         static dispatch_once_t once;
         dispatch_once(&once, ^{ SGLog(@"local files: the queue glyph %@ before the player's artist hidden", NSStringFromClass(glyph.class)); });
         return;

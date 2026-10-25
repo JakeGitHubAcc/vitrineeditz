@@ -290,6 +290,9 @@ static NSArray<SGLocalAlbum *> *scan(NSDictionary<NSString *, NSString *> *seen)
         NSString *first = nil;
         for (SGLocalTrack *track in tracks) if (track.lead.length) { first = track.lead; break; }
         album.artist = artists.count > 1 ? @"Various Artists" : first ?: @"Unknown Artist";
+        // The artist the user named the album by, over the one its tracks give it.
+        id named = [[NSUserDefaults.standardUserDefaults dictionaryForKey:SGKeyLocalAlbumArtists] objectForKey:key];
+        if ([named isKindOfClass:NSString.class] && [named length]) album.artist = named;
         album.seconds = seconds;
         album.year = year;
         album.added = added;
@@ -559,4 +562,45 @@ void SGLocalAlbumSetType(SGLocalAlbum *album, SGLocalAlbumType type) {
     if (types.count) [NSUserDefaults.standardUserDefaults setObject:types forKey:SGKeyLocalAlbumTypes];
     else [NSUserDefaults.standardUserDefaults removeObjectForKey:SGKeyLocalAlbumTypes];
     [NSNotificationCenter.defaultCenter postNotificationName:SGLocalAlbumsDidChangeNotification object:nil];
+}
+
+#pragma mark - the album's own edits
+
+// A dictionary of the defaults' with `value` under `key`, nil removing it.
+static void storeByAlbum(NSString *defaultsKey, NSString *key, id value) {
+    NSMutableDictionary *all = [[NSUserDefaults.standardUserDefaults dictionaryForKey:defaultsKey] mutableCopy] ?: [NSMutableDictionary dictionary];
+    if (value) all[key] = value;
+    else [all removeObjectForKey:key];
+    if (all.count) [NSUserDefaults.standardUserDefaults setObject:all forKey:defaultsKey];
+    else [NSUserDefaults.standardUserDefaults removeObjectForKey:defaultsKey];
+}
+
+void SGLocalAlbumSetArtist(SGLocalAlbum *album, NSString *artist) {
+    if (!album.key) return;
+    NSString *name = [artist stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    storeByAlbum(SGKeyLocalAlbumArtists, album.key, name.length ? name : nil);
+    SGLocalAlbumsRefresh(nil);
+}
+
+void SGLocalAlbumRename(SGLocalAlbum *album, NSString *title) {
+    NSString *name = [title stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    if (!album.key || !name.length || [name isEqualToString:album.title]) return;
+    // What was kept for the album goes with it to the key its new name gathers it under.
+    NSString *key = folded(name);
+    for (NSString *defaultsKey in @[SGKeyLocalAlbumArtists, SGKeyLocalAlbumTypes]) {
+        id kept = [[NSUserDefaults.standardUserDefaults dictionaryForKey:defaultsKey] objectForKey:album.key];
+        if (!kept || [key isEqualToString:album.key]) continue;
+        storeByAlbum(defaultsKey, key, kept);
+        storeByAlbum(defaultsKey, album.key, nil);
+    }
+    NSMutableArray<NSString *> *uris = [NSMutableArray array];
+    for (SGLocalTrack *track in album.tracks) [uris addObject:track.uri];
+    SGLocalFilesSaveAlbum(uris, name, nil);
+}
+
+void SGLocalAlbumSetCover(SGLocalAlbum *album, UIImage *cover) {
+    if (!cover) return;
+    NSMutableArray<NSString *> *uris = [NSMutableArray array];
+    for (SGLocalTrack *track in album.tracks) [uris addObject:track.uri];
+    SGLocalFilesSaveAlbum(uris, nil, cover);
 }
