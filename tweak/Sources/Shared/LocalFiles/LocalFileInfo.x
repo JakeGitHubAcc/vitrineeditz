@@ -38,6 +38,63 @@ static NSDictionary *withEdit(NSDictionary *metadata, NSString *uri) {
     return edited;
 }
 
+#pragma mark - the full player's title and artist
+
+// The full player names the track from a model of its own rather than from -metadata (device, 9.1.94: the bar
+// showed "Song" by "C, A", the player "Song (feat. A)" by "C"). So while a local file whose title names guests
+// plays, the labels showing its own title, and the player's artist label showing its own artist, are given the
+// credited names as they are set. Main thread only: UILabel is set there.
+static NSString *sg_rawTitle, *sg_shownTitle, *sg_rawArtist, *sg_shownArtist;
+static NSString *const kPlayerArtist = @"now-playing-subtitle-label";
+
+static BOOL inPlayerArtist(UIView *label) {
+    UIView *v = label;
+    for (NSUInteger i = 0; v && i < 4; i++, v = v.superview) {
+        if ([v.accessibilityIdentifier isEqualToString:kPlayerArtist]) return YES;
+    }
+    return NO;
+}
+
+static NSString *credited(UILabel *label, NSString *text) {
+    if (!sg_rawTitle || !text.length || !NSThread.isMainThread) return nil;
+    if ([text isEqualToString:sg_rawTitle]) return sg_shownTitle;
+    if (sg_rawArtist && [text isEqualToString:sg_rawArtist] && inPlayerArtist(label)) return sg_shownArtist;
+    return nil;
+}
+
+// Labels set before the player's state said the track changed are put right once it has.
+static void recreditLabels(void) {
+    if (!sg_rawTitle) return;
+    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+        if (![scene isKindOfClass:UIWindowScene.class]) continue;
+        for (UIWindow *window in ((UIWindowScene *)scene).windows) {
+            SGForEachView(window, ^(UIView *view) {
+                if (![view isKindOfClass:UILabel.class]) return;
+                UILabel *label = (UILabel *)view;
+                if (!credited(label, label.text)) return;
+                // Set again as it is: the setters swap the words and keep the label's attributes.
+                if (label.attributedText.length) label.attributedText = label.attributedText;
+                else label.text = label.text;
+            });
+        }
+    }
+}
+
+static void creditPlaying(NSString *uri) {
+    NSDictionary *shown = SGLocalFileShown(uri);
+    if (![shown[@"credited"] boolValue]) {
+        sg_rawTitle = sg_shownTitle = sg_rawArtist = sg_shownArtist = nil;
+        return;
+    }
+    NSDictionary *info = SGLocalFileInfo(uri);
+    sg_rawTitle = info[@"title"];
+    sg_shownTitle = shown[@"title"];
+    sg_rawArtist = info[@"artist"];
+    sg_shownArtist = shown[@"artist"];
+    recreditLabels();
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.4 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ recreditLabels(); });
+}
+
 #pragma mark - the system's now playing artwork
 
 @interface SGLocalFileNowPlaying : NSObject <SGPlayerStateObserver>
@@ -70,10 +127,12 @@ static NSDictionary *withEdit(NSDictionary *metadata, NSString *uri) {
     if (!track || [track isEqualToString:_track]) return;
     _track = track;
     [self show:state];
+    creditPlaying(track);
 }
 
 - (void)editsChanged:(NSNotification *)note {
     if ([note.object isEqual:_track]) [self show:SGPlayerState()];
+    creditPlaying(_track);
 }
 
 @end
@@ -85,6 +144,24 @@ static NSDictionary *withEdit(NSDictionary *metadata, NSString *uri) {
     NSDictionary *metadata = %orig;
     NSString *uri = SGURIString(self.URI);
     return SGLocalFileIs(uri) ? withEdit(metadata, uri) : metadata;
+}
+%end
+
+%hook UILabel
+- (void)setText:(NSString *)text {
+    %orig(credited(self, text) ?: text);
+}
+
+- (void)setAttributedText:(NSAttributedString *)text {
+    NSString *swap = credited(self, text.string);
+    if (!swap) {
+        %orig;
+        return;
+    }
+    // The new words in the attributes the old ones had.
+    NSMutableAttributedString *changed = [text mutableCopy];
+    [changed replaceCharactersInRange:NSMakeRange(0, changed.length) withString:swap];
+    %orig(changed);
 }
 %end
 
