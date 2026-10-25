@@ -442,9 +442,22 @@ void SGLocalAlbumPlay(SGLocalAlbum *album, NSUInteger from, BOOL shuffle, void (
     if (!order.count) { done(@"The album has no tracks."); return; }
     id player = SGPlayer();
     Class wrapperClass = NSClassFromString(@"SPTPlayerQueueWrapperImpl"), trackClass = NSClassFromString(@"SPTPlayerTrack");
-    if (!player || !SGPlayerState().track || ![wrapperClass instancesRespondToSelector:@selector(initWithPlayer:)] ||
+    // The player's own state when the mod has not been told one yet.
+    SPTPlayerState *state = SGPlayerState() ?: ([player respondsToSelector:@selector(state)] ? [(id<SPTPlayer>)player state] : nil);
+    if (!player) {
+        SGLog(@"local albums: no player");
+        done(@"Spotify's player was not found. Play any song, then try again.");
+        return;
+    }
+    if (![wrapperClass instancesRespondToSelector:@selector(initWithPlayer:)] ||
         ![wrapperClass instancesRespondToSelector:@selector(queueMultipleTracks:loggingParams:)] ||
         ![trackClass instancesRespondToSelector:@selector(initWithURI:albumURI:artistURI:andUID:)]) {
+        SGLog(@"local albums: the queue's methods are missing");
+        done(@"This version of Spotify has no queue the mod can play an album through.");
+        return;
+    }
+    if (![state isKindOfClass:objc_getClass("SPTPlayerState")] || !state.track) {
+        SGLog(@"local albums: no track in the player's state (%@)", [state class]);
         done(@"Play any song first: Spotify's queue is not ready until something has played.");
         return;
     }

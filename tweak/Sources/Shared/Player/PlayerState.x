@@ -65,9 +65,12 @@ static void report(id state, BOOL platform) {
 
 static SGPlayerObserver *sg_ownObserver;
 static __weak id sg_player;
+// The player the now playing platform hears from, for when the first one seen is gone: on 9.1.94 the first
+// player the app adds an observer to can be one it lets go, and the mod was left with none.
+static __weak id sg_reportingPlayer;
 
 id SGPlayer(void) {
-    return sg_player;
+    return sg_player ?: sg_reportingPlayer;
 }
 
 %hook _TtC23NowPlaying_PlatformImpl28StatefulPlayerImplementation
@@ -77,6 +80,10 @@ id SGPlayer(void) {
     dispatch_once(&once, ^{
         SGLog(@"player state: from %@, a %@, on the main thread %d", [player class], [state class], NSThread.isMainThread);
     });
+    if ([player respondsToSelector:@selector(skipToNextTrackWithOptions:track:)]) {
+        if (NSThread.isMainThread) sg_reportingPlayer = player;
+        else dispatch_async(dispatch_get_main_queue(), ^{ sg_reportingPlayer = player; });
+    }
     report(state, YES);
 }
 %end
