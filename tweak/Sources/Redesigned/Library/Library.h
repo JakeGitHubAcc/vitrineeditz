@@ -30,6 +30,8 @@ void SGRLibraryClearScrim(UIView *header);
 // pushed from `owner`; and the page of the album a local file's URI belongs to, NO when it is none of them.
 void SGRShowLocalAlbums(UIViewController *owner);
 BOOL SGRShowLocalAlbumOf(UIViewController *owner, NSString *uri);
+// Local Albums as a page of its own, for Mod Settings to push under either look.
+UIViewController *SGRLocalAlbumsPageNew(void);
 
 // DriveImportPage.m. Asks for a Google Drive share link over `owner` and imports what it shares
 // (Shared/LocalFiles/DriveImport.h), showing the import's progress on a page of its own.

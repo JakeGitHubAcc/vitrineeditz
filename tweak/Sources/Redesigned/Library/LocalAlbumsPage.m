@@ -450,6 +450,10 @@ void SGRShowLocalAlbums(UIViewController *owner) {
     SGShowPage(owner, [SGRLocalAlbumsPage new]);
 }
 
+UIViewController *SGRLocalAlbumsPageNew(void) {
+    return [SGRLocalAlbumsPage new];
+}
+
 BOOL SGRShowLocalAlbumOf(UIViewController *owner, NSString *uri) {
     SGLocalAlbum *album = SGLocalAlbumOfTrack(uri);
     if (!album) return NO;
