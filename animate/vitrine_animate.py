@@ -69,6 +69,8 @@ KEY = re.compile(r"^[0-9a-f]{16,64}$")
 # Wan 2.2 TI2V-5B works in multiples of 32 and 4n+1 frames at 24 fps; a 640 square fits an 8 GB card, and
 # 73 frames is three seconds. Its frames are only measured for their motion (motion.py).
 SIDE, FRAMES, FPS = 640, 73, 24
+# The addresses Tailscale gives the user's own devices, let in with the home network's.
+TAILSCALE = ipaddress.ip_network("100.64.0.0/10")
 # What the phone may switch off, each by its name in `off`: people moving, things moving (bees, clouds, flowers,
 # bubbles), curtains and trees swaying, fog, drips, water's waves, glints and jewelry, the light's shift, the video
 # model's motion of the sky, and the film grain.
@@ -563,9 +565,11 @@ def work(jobs, comfy, lama, faces, keep_labels, persons=None, scenes=None, finde
 def handler(jobs):
     class Handler(BaseHTTPRequestHandler):
         def private(self):
+            # The home network, or the user's own devices on Tailscale (100.64.0.0/10, which Python does not count
+            # as private), so the phone reaches it away from home too.
             try:
                 address = ipaddress.ip_address(self.client_address[0])
-                return address.is_private or address.is_loopback
+                return address.is_private or address.is_loopback or address in TAILSCALE
             except ValueError:
                 return False
 
@@ -623,6 +627,15 @@ def handler(jobs):
     return Handler
 
 
+def tailscale_address():
+    """This computer's address on the user's Tailscale network, or None without Tailscale."""
+    try:
+        out = subprocess.run(["tailscale", "ip", "-4"], capture_output=True, text=True, timeout=5).stdout.split()
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return next((a for a in out if a.startswith("100.")), None)
+
+
 def lan_address():
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
         try:
@@ -668,7 +681,10 @@ def main():
     threading.Thread(target=work, args=(jobs, comfy, lama, faces, args.keep_labels, persons, scenes, finders), daemon=True).start()
     server = ThreadingHTTPServer((args.host, args.port), handler(jobs))
     print()
-    print(f"Vitrine Animate is running. In Vitrine's lock screen settings, set Computer to:  {lan_address()}:{args.port}")
+    print(f"Vitrine Animate is running. In Vitrine's Animated Covers settings, set Computer to:  {lan_address()}:{args.port}")
+    away = tailscale_address()
+    if away:
+        print(f"Away from home, with Tailscale on the iPhone too, use:  {away}:{args.port}  (it works at home as well)")
     print(f"Clips are kept in {args.clips}. Leave this window open while covers animate.")
     print()
     try:

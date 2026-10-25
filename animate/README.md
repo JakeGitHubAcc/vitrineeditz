@@ -64,6 +64,18 @@ To leave labels on, add `--keep-labels` to the command in `start.bat`.
    The row reads Waiting, Animating and Saved. Music can keep playing with the phone locked.
    **Animate Again** makes a new loop in place of the old one.
 
+### Away from home
+
+The server only answers your home network, and devices on your own [Tailscale](https://tailscale.com)
+network. To animate covers and get them from anywhere:
+
+1. Install Tailscale on the computer and on the iPhone, and sign in to the same account on both.
+2. Start `start.bat` again. It prints a second address, `100.x.y.z:8790`.
+3. On the phone, set **Computer** to that address. It works at home too, so it can stay set.
+
+If the phone can't reach it, allow Python through Windows Firewall on **Public** networks as well. Windows
+may treat Tailscale's connection as public.
+
 Only requests from the home network are answered. The covers' album and artist names go to Apple's
 iTunes Search API to find a clean copy. Settings are at the top of each file: the model's size, length and
 prompt in `vitrine_animate.py`, how much things move and the grain in `motion.py`, how a crowd sways in `crowd.py`, curtains and what keeps its shape in `scene.py`, and the edges' blur
