@@ -9,6 +9,8 @@
 //
 // Threading: main thread only.
 #import <AVFoundation/AVFoundation.h>
+#import <PhotosUI/PhotosUI.h>
+#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #import "Core/SGCore.h"
 #import "Redesigned/Kit/SGRKit.h"
 #import "Settings/SGPage.h"
@@ -277,7 +279,7 @@ static UIImageView *coverView(CGFloat radius) {
 static const CGFloat kDissolve = 0.46, kTopScrim = 140, kTopScrimAlpha = 0.28;
 // The hero runs a little taller than the cover is wide, as the Music app's album page does.
 static const CGFloat kHeroAspect = 1.1;
-static const CGFloat kTrackRow = 56, kRowMore = 44;
+static const CGFloat kTrackRow = 56, kRowMore = 44, kBadgeSide = 15;
 
 @interface SGRLocalAlbumHero : UIView
 @property (nonatomic, readonly) UIImageView *picture;
@@ -428,10 +430,13 @@ static UIControl *rowSource(NSString *symbol, NSString *word, void (^tapped)(voi
 @property (nonatomic, strong, readonly) UILabel *title, *artist;
 @property (nonatomic, strong, readonly) UIButton *more;
 @property (nonatomic) BOOL credited;
+// The explicit badge before the artist, as Spotify draws it on a track marked explicit.
+@property (nonatomic) BOOL explicitMark;
 @end
 
 @implementation SGRLocalTrackCell {
     UIView *_hairline;
+    UILabel *_badge;
 }
 
 - (instancetype)initWithStyle:(UITableViewCellStyle)style reuseIdentifier:(NSString *)identifier {
@@ -450,7 +455,15 @@ static UIControl *rowSource(NSString *symbol, NSString *word, void (^tapped)(voi
     _more.accessibilityLabel = @"More";
     _hairline = [UIView new];
     _hairline.backgroundColor = SGRHairline();
-    for (UIView *view in @[_title, _artist, _more, _hairline]) [self.contentView addSubview:view];
+    // Spotify's badge: an E on a light square with rounded corners, a line's cap height tall.
+    _badge = label([UIFont systemFontOfSize:kBadgeSide * 0.66 weight:UIFontWeightBold], UIColor.blackColor);
+    _badge.text = @"E";
+    _badge.textAlignment = NSTextAlignmentCenter;
+    _badge.backgroundColor = SGRSecondary();
+    _badge.layer.cornerRadius = 2;
+    _badge.layer.masksToBounds = YES;
+    _badge.accessibilityLabel = @"Explicit";
+    for (UIView *view in @[_title, _artist, _badge, _more, _hairline]) [self.contentView addSubview:view];
     return self;
 }
 
@@ -461,10 +474,16 @@ static UIControl *rowSource(NSString *symbol, NSString *word, void (^tapped)(voi
     CGFloat text = CGRectGetMinX(_more.frame) - SGRGrid - SGRSideMargin;
     CGFloat titleHeight = ceil(_title.font.lineHeight), artistHeight = ceil(_artist.font.lineHeight);
     _artist.hidden = !self.credited;
-    if (self.credited) {
-        CGFloat top = round((height - titleHeight - 2 - artistHeight) / 2);
+    _badge.hidden = !self.explicitMark;
+    if (self.credited || self.explicitMark) {
+        CGFloat top = round((height - titleHeight - 2 - artistHeight) / 2), line = top + titleHeight + 2;
         _title.frame = CGRectMake(SGRSideMargin, top, text, titleHeight);
-        _artist.frame = CGRectMake(SGRSideMargin, top + titleHeight + 2, text, artistHeight);
+        CGFloat x = SGRSideMargin;
+        if (self.explicitMark) {
+            _badge.frame = CGRectMake(x, line + round((artistHeight - kBadgeSide) / 2), kBadgeSide, kBadgeSide);
+            x = CGRectGetMaxX(_badge.frame) + 6;
+        }
+        _artist.frame = CGRectMake(x, line, MAX(0, SGRSideMargin + text - x), artistHeight);
     } else {
         _title.frame = CGRectMake(SGRSideMargin, round((height - titleHeight) / 2), text, titleHeight);
     }
@@ -473,7 +492,7 @@ static UIControl *rowSource(NSString *symbol, NSString *word, void (^tapped)(voi
 }
 @end
 
-@interface SGRLocalAlbumPage () <SGPlayerStateObserver>
+@interface SGRLocalAlbumPage () <SGPlayerStateObserver, PHPickerViewControllerDelegate, UIDocumentPickerDelegate>
 @end
 
 @implementation SGRLocalAlbumPage {
@@ -516,6 +535,10 @@ static UIControl *rowSource(NSString *symbol, NSString *word, void (^tapped)(voi
     _header = [UIView new];
     [_header addSubview:_hero];
     [_header addSubview:_info];
+    // A double tap on the cover, the title or the artist edits it.
+    UITapGestureRecognizer *edit = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(headerDoubleTapped:)];
+    edit.numberOfTapsRequired = 2;
+    [_header addGestureRecognizer:edit];
 
     [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(albumsChanged) name:SGLocalAlbumsDidChangeNotification object:nil];
     [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(fieldColorChanged:) name:SGRFieldColorDidChangeNotification object:_field];
@@ -642,6 +665,82 @@ static UIControl *rowSource(NSString *symbol, NSString *word, void (^tapped)(voi
     });
 }
 
+#pragma mark - editing the album
+
+// The header's line showing `text`, or nil: the Kit's header (SGRHeaderInfo) draws the title and the artist as labels.
+- (UILabel *)headerLine:(NSString *)text {
+    for (UIView *view in _info.subviews) {
+        if ([view isKindOfClass:UILabel.class] && !view.hidden && [((UILabel *)view).text isEqualToString:text]) return (UILabel *)view;
+    }
+    return nil;
+}
+
+- (void)headerDoubleTapped:(UITapGestureRecognizer *)recognizer {
+    CGPoint point = [recognizer locationInView:_info];
+    UILabel *title = [self headerLine:_album.title], *artist = [self headerLine:_album.artist];
+    // A line's whole width answers, and a little above and below it, for a finger.
+    BOOL (^on)(UILabel *) = ^BOOL(UILabel *line) {
+        if (!line) return NO;
+        CGRect frame = line.frame;
+        return point.y >= CGRectGetMinY(frame) - 8 && point.y <= CGRectGetMaxY(frame) + 8;
+    };
+    if (on(title)) [self askText:@"Album Title" now:_album.title then:^(NSString *text) { SGLocalAlbumRename(self->_album, text); }];
+    else if (on(artist)) [self askText:@"Album Artist" now:_album.artist then:^(NSString *text) { SGLocalAlbumSetArtist(self->_album, text); }];
+    else if (!title || point.y < CGRectGetMinY(title.frame)) [self askCover];
+}
+
+- (void)askText:(NSString *)title now:(NSString *)now then:(void (^)(NSString *text))then {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:title message:nil preferredStyle:UIAlertControllerStyleAlert];
+    [alert addTextFieldWithConfigurationHandler:^(UITextField *field) {
+        field.text = now;
+        field.clearButtonMode = UITextFieldViewModeWhileEditing;
+        field.autocapitalizationType = UITextAutocapitalizationTypeWords;
+    }];
+    __weak UIAlertController *weakAlert = alert;
+    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Save" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        then(weakAlert.textFields.firstObject.text ?: @"");
+    }]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)askCover {
+    UIAlertController *sheet = [UIAlertController alertControllerWithTitle:@"Album Cover" message:nil preferredStyle:UIAlertControllerStyleActionSheet];
+    __weak SGRLocalAlbumPage *weakSelf = self;
+    [sheet addAction:[UIAlertAction actionWithTitle:@"Choose from Photos" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        PHPickerConfiguration *configuration = [PHPickerConfiguration new];
+        configuration.filter = PHPickerFilter.imagesFilter;
+        configuration.selectionLimit = 1;
+        PHPickerViewController *picker = [[PHPickerViewController alloc] initWithConfiguration:configuration];
+        picker.delegate = weakSelf;
+        [weakSelf presentViewController:picker animated:YES completion:nil];
+    }]];
+    [sheet addAction:[UIAlertAction actionWithTitle:@"Choose from Files" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        UIDocumentPickerViewController *picker = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[UTTypeImage] asCopy:YES];
+        picker.delegate = weakSelf;
+        [weakSelf presentViewController:picker animated:YES completion:nil];
+    }]];
+    [sheet addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    sheet.popoverPresentationController.sourceView = _hero;
+    [self presentViewController:sheet animated:YES completion:nil];
+}
+
+- (void)picker:(PHPickerViewController *)picker didFinishPicking:(NSArray<PHPickerResult *> *)results {
+    [picker dismissViewControllerAnimated:YES completion:nil];
+    NSItemProvider *provider = results.firstObject.itemProvider;
+    if (![provider canLoadObjectOfClass:UIImage.class]) return;
+    SGLocalAlbum *album = _album;
+    [provider loadObjectOfClass:UIImage.class completionHandler:^(id<NSItemProviderReading> image, NSError *error) {
+        if (![(id)image isKindOfClass:UIImage.class]) return;
+        dispatch_async(dispatch_get_main_queue(), ^{ SGLocalAlbumSetCover(album, (UIImage *)image); });
+    }];
+}
+
+- (void)documentPicker:(UIDocumentPickerViewController *)picker didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
+    UIImage *image = urls.firstObject ? [UIImage imageWithContentsOfFile:urls.firstObject.path] : nil;
+    if (image) SGLocalAlbumSetCover(_album, image);
+}
+
 - (void)showAlbumMenu {
     UIAlertController *sheet = [UIAlertController alertControllerWithTitle:_album.title message:_album.artist preferredStyle:UIAlertControllerStyleActionSheet];
     __weak SGRLocalAlbumPage *weakSelf = self;
@@ -694,7 +793,12 @@ static UIControl *rowSource(NSString *symbol, NSString *word, void (^tapped)(voi
         SGRLocalAlbumPage *page = weakSelf;
         if (page) SGLocalFilePresentEditor(page, track.uri);
     }];
-    return [UIMenu menuWithChildren:@[play, edit]];
+    BOOL marked = SGLocalFileExplicit(track.uri);
+    UIAction *explicitMark = [UIAction actionWithTitle:marked ? @"Remove Explicit Mark" : @"Mark as Explicit"
+                                                 image:[UIImage systemImageNamed:@"e.square"] identifier:nil handler:^(UIAction *action) {
+        SGLocalFileSetExplicit(track.uri, !marked);
+    }];
+    return [UIMenu menuWithChildren:@[play, edit, explicitMark]];
 }
 
 - (NSInteger)tableView:(UITableView *)table numberOfRowsInSection:(NSInteger)section {
@@ -713,10 +817,13 @@ static UIControl *rowSource(NSString *symbol, NSString *word, void (^tapped)(voi
     // The playing track's title in the accent, as Spotify marks it.
     cell.title.textColor = _playing && [_playing isEqualToString:track.uri] ? SGRAccent() : SGRPrimary();
     // The artist line only where it says something the header does not (Redesigned/Album/AlbumCredits.m).
-    cell.credited = track.artist.length && !SGRCreditRepeatsAlbum(_album.artist, track.artist, track.title);
+    // Every track names its artists, the album's own too, as the user asked of local albums.
+    cell.credited = track.artist.length > 0;
+    cell.explicitMark = SGLocalFileExplicit(track.uri);
     cell.artist.text = track.artist;
     cell.more.menu = [self menuForTrack:(NSUInteger)path.row];
-    cell.accessibilityLabel = cell.credited ? [NSString stringWithFormat:@"%@, %@", track.title, track.artist] : track.title;
+    NSString *spoken = cell.credited ? [NSString stringWithFormat:@"%@, %@", track.title, track.artist] : track.title;
+    cell.accessibilityLabel = cell.explicitMark ? [spoken stringByAppendingString:@", Explicit"] : spoken;
     [cell setNeedsLayout];
     return cell;
 }

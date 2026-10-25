@@ -237,6 +237,14 @@ static NSArray<UIMenuElement *> *playerItems(void) {
             SGRShowLocalAlbumOf(SGTopController(), playing);
         }]];
     }
+    // A local file is never explicit to Spotify; the user marks it, and the player shows the badge.
+    if (SGLocalFileIs(playing)) {
+        BOOL marked = SGLocalFileExplicit(playing);
+        [items addObject:[UIAction actionWithTitle:marked ? @"Remove Explicit Mark" : @"Mark as Explicit" image:symbol(@"e.square")
+                                        identifier:nil handler:^(UIAction *action) {
+            SGLocalFileSetExplicit(playing, !marked);
+        }]];
+    }
     return items;
 }
 

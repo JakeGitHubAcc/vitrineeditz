@@ -80,3 +80,14 @@ SGLocalAlbumType SGLocalAlbumShownType(SGLocalAlbum *album);
 NSString *SGLocalAlbumTypeName(SGLocalAlbumType type);
 // Picks the album's type, Automatic forgetting the pick; posts SGLocalAlbumsDidChangeNotification. Main thread.
 void SGLocalAlbumSetType(SGLocalAlbum *album, SGLocalAlbumType type);
+
+// The album's own edits from its page. Main thread; the albums are scanned again after each.
+// The artist it is shown by, over the one its tracks give it ("Various Artists"): the album's alone, each track
+// keeping its own artists. Kept by album under SGKeyLocalAlbumArtists; empty forgets it.
+#define SGKeyLocalAlbumArtists @"spotifyglass.localAlbums.artists"
+void SGLocalAlbumSetArtist(SGLocalAlbum *album, NSString *artist);
+// A new name on every one of its tracks (LocalFiles.h's edits), so the player and the lock screen show it too;
+// its artist and type go with it.
+void SGLocalAlbumRename(SGLocalAlbum *album, NSString *title);
+// A new cover on every one of its tracks.
+void SGLocalAlbumSetCover(SGLocalAlbum *album, UIImage *cover);
