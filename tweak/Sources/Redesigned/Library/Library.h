@@ -11,6 +11,8 @@
 //                       (Redesigned/Navbar/SearchField.x)
 //     LocalAlbumsPage.m Local Albums: the local files as albums, sorted, each with a page of its own, opened
 //                       from a button in the header (Shared/LocalFiles/LocalAlbums.h)
+//     RecordsPage.m     Records: the saved albums and the local ones as a crate of records to flip through, the
+//                       page of its own tab, vitrine:records
 //     DriveImportPage.m Add from Google Drive, the + of Local Albums: songs from a share link saved as local
 //                       files (Shared/LocalFiles/DriveImport.h)
 //
@@ -32,6 +34,9 @@ void SGRShowLocalAlbums(UIViewController *owner);
 BOOL SGRShowLocalAlbumOf(UIViewController *owner, NSString *uri);
 // Local Albums as a page of its own, for Mod Settings to push under either look.
 UIViewController *SGRLocalAlbumsPageNew(void);
+
+// RecordsPage.m. Records as a page of its own; its tab opens it as vitrine:records (Shared/Navigation/Links.h).
+UIViewController *SGRRecordsPageNew(void);
 
 // DriveImportPage.m. Asks for a Google Drive share link over `owner` and imports what it shares
 // (Shared/LocalFiles/DriveImport.h), showing the import's progress on a page of its own.
