@@ -31,6 +31,9 @@ SHOWN_FIRST, SHOWN_LAST, FADE = 0.3, 0.12, 1.2
 # edge wavers and how much it is speckled (shares of the order the text goes in), the waver's size as a share of
 # the side and the speckle's dots in pixels.
 SPRAY_EDGE, SPRAY_ROUGH, SPRAY_SPECKLE, SPRAY_WAVER, SPRAY_DOT = 0.14, 0.12, 0.16, 0.03, 0.7
+# Line boil: how many redrawn copies, how many frames each is held (on threes at 24 fps), how far a line wavers
+# broadly and trembles finely (pixels, a deviation), and the waver's size (a share of the side) and tremble's (pixels).
+BOIL_COPIES, BOIL_HOLD, BOIL_SHIFT, BOIL_TREMBLE, BOIL_BROAD, BOIL_FINE = 3, 3, 1.1, 0.45, 0.015, 1.6
 # The sway: the drift sideways and up and down and the push in, as shares of the frame's width, and the
 # tilt in degrees. The frame is always enlarged by at least ZOOM_LEAST, so its edges never show.
 DRIFT_X, DRIFT_Y, PUSH, TILT, ZOOM_LEAST = 0.005, 0.003, 0.012, 0.25, 1.025
@@ -126,6 +129,32 @@ def faded(cover, text, mask, amount):
     """The frame's cover with the still text over it at `amount` (a number, or one per pixel), inside `mask`."""
     a = (mask * amount)[..., None]
     return cover * (1 - a) + text * a
+
+
+class Boil:
+    """Line boil, for a drawn cover: the drawing as if redrawn a few times by hand and the copies cycled, each held
+    for a few frames as animation is drawn on twos, so its lines shimmer and jump a little while the picture stays.
+    Each copy is the cover moved along a field of its own, broad wavers and a fine tremble, a pixel or two at most.
+    The last frame takes the first frame's copy, so the loop closes."""
+
+    def __init__(self, side, seed):
+        rng = np.random.default_rng(seed)
+        y, x = np.mgrid[0:side, 0:side].astype(np.float32)
+        self.maps = []
+        for _ in range(BOIL_COPIES):
+            field = []
+            for _ in range(2):
+                broad = gaussian_filter(rng.standard_normal((side, side)).astype(np.float32), BOIL_BROAD * side)
+                fine = gaussian_filter(rng.standard_normal((side, side)).astype(np.float32), BOIL_FINE)
+                broad *= BOIL_SHIFT / max(float(broad.std()), 1e-6)
+                fine *= BOIL_TREMBLE / max(float(fine.std()), 1e-6)
+                field.append(broad + fine)
+            self.maps.append((x + field[0], y + field[1]))
+
+    def over(self, frame, i, n):
+        copy = 0 if i == n - 1 else (i // BOIL_HOLD) % BOIL_COPIES
+        map_x, map_y = self.maps[copy]
+        return cv2.remap(frame, map_x, map_y, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
 
 
 class Spray:

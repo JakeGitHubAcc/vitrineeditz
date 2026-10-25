@@ -128,7 +128,7 @@ static NSURL *endpoint(NSString *path, NSString *key, NSDictionary<NSString *, N
     NSString *base = [server containsString:@"://"] ? server : [@"http://" stringByAppendingString:server];
     NSURLComponents *url = [NSURLComponents componentsWithString:[NSString stringWithFormat:@"%@/%@", base, path]];
     NSMutableArray *query = [NSMutableArray arrayWithObject:[NSURLQueryItem queryItemWithName:@"key" value:key]];
-    for (NSString *name in @[@"album", @"artist", @"text", @"sway"]) {
+    for (NSString *name in @[@"album", @"artist", @"text", @"sway", @"boil", @"off"]) {
         if ([names[name] isKindOfClass:NSString.class] && names[name].length) [query addObject:[NSURLQueryItem queryItemWithName:name value:names[name]]];
     }
     url.queryItems = query;
@@ -272,6 +272,13 @@ void SGAnimatedCoverRequest(NSString *picture, NSString *album, NSString *artist
     if (artist.length) names[@"artist"] = artist;
     names[@"text"] = @[@"keep", @"fade", @"hide", @"spray"][(NSUInteger)MIN(MAX(SGInt(SGKeyAnimateText, SGAnimateTextKeep), 0), 3)];
     names[@"sway"] = SGHidden(SGKeyAnimateSway) ? @"1" : @"0";   // an option row: off until switched on
+    names[@"boil"] = SGHidden(SGKeyAnimateBoil) ? @"1" : @"0";
+    // What moves, switched off on the Animated Covers page, by the server's names.
+    NSMutableArray<NSString *> *off = [NSMutableArray array];
+    for (NSArray<NSString *> *effect in SGAnimateEffects()) {
+        if (!SGEnabled([SGKeyAnimateEffectPrefix stringByAppendingString:effect[0]])) [off addObject:effect[0]];
+    }
+    if (off.count) names[@"off"] = [off componentsJoinedByString:@","];
     [names writeToURL:namesFor(key) error:nil];
     setPending(key, album ?: @"");
     send(key, png, ^(NSString *error) {

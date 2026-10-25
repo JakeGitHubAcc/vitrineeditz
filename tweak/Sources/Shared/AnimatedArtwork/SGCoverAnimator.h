@@ -20,6 +20,15 @@ typedef NS_ENUM(NSInteger, SGAnimateText) {
     SGAnimateTextHide,       // the text is painted out
     SGAnimateTextSpray,      // the text is sprayed off along its diagonal and back on, a spray paint edge
 };
+// Line boil, for a drawn cover: off until switched on (read with SGHidden, as the sway).
+#define SGKeyAnimateBoil @"spotifyglass.animate.boil"
+// Each of what moves on a cover, on until switched off: the prefix and the server's name of it (SGAnimateEffects).
+#define SGKeyAnimateEffectPrefix @"spotifyglass.animate.effect."
+// What moves on a cover, each {the server's name, title, what it does}, in the page's order.
+NSArray<NSArray<NSString *> *> *SGAnimateEffects(void);
+// The Animated Covers page: the computer, the text, the style and what moves. Defined in AnimatedArtworkSettings.m.
+@class UIViewController;
+UIViewController *SGAnimatedCoversPage(void);
 
 // Posted once a cover's loop is saved; the object is its key (SGAnimatedCoverKey).
 extern NSNotificationName const SGAnimatedCoverSavedNotification;

@@ -18,7 +18,8 @@ and artist; this server queues it and makes its loop:
 and keeps the MP4 in the clips folder, where the phone downloads it. One job runs at a time. Run it with
 ComfyUI's own Python (start.bat), which has everything it imports.
 
-    POST /animate?key=K&album=A&artist=R&text=keep|fade|hide|spray&sway=0|1
+    POST /animate?key=K&album=A&artist=R&text=keep|fade|hide|spray&sway=0|1&boil=0|1&off=people,things,...
+                                             (off: any of EFFECTS, each left out of the clip)
                                        body: PNG -> {"state": "queued"|"running"|"done", "position": n}
                                                         (a cover sent again is animated again)
     GET  /status?key=K                    -> {"state": ..., "progress": 0..1, "position": n, "error": ...}
@@ -68,6 +69,10 @@ KEY = re.compile(r"^[0-9a-f]{16,64}$")
 # Wan 2.2 TI2V-5B works in multiples of 32 and 4n+1 frames at 24 fps; a 640 square fits an 8 GB card, and
 # 73 frames is three seconds. Its frames are only measured for their motion (motion.py).
 SIDE, FRAMES, FPS = 640, 73, 24
+# What the phone may switch off, each by its name in `off`: people moving, things moving (bees, clouds, flowers,
+# bubbles), curtains and trees swaying, fog, drips, water's waves, glints and jewelry, the light's shift, the video
+# model's motion of the sky, and the film grain.
+EFFECTS = {"people", "things", "sway", "fog", "drips", "water", "glints", "light", "model", "grain"}
 # How long the video model takes before a run has been timed, in seconds (an RTX 4060 8 GB).
 MODEL_SECONDS = 240
 # How far motion eases to still toward a starfield, in pixels of the flow (motion.FLOW_SIZE).
@@ -380,11 +385,17 @@ def work(jobs, comfy, lama, faces, keep_labels, persons=None, scenes=None, finde
             # Text and faces as boxes in shares of the cover's side; the trim it is shown with is a hair's.
             text = [tuple(v / cover.width for v in box) for _, score, box in lines if score > 0.5]
             people = [tuple(v / shown.width for v in box) for box in motion.faces(np.asarray(shown), faces)]
+            # Text the reader misses (in perspective on To the Stars' wall), as the finder names it.
+            text += props.text_boxes(np.asarray(shown), finders, text, people) if finders else []
             wording = names.get("text", "keep") if text and lama else "keep"
             if wording not in ("keep", "fade", "hide", "spray"):
                 wording = "keep"
             sway = names.get("sway") == "1"
-            say(f"{len(text)} lines of text ({wording}), {len(people)} faces, {'a' if sway else 'no'} camera sway")
+            # What the phone's Animated Covers page switched off (EFFECTS), and line boil for a drawn cover.
+            off = {name for name in names.get("off", "").split(",") if name in EFFECTS}
+            boil = names.get("boil") == "1"
+            say(f"{len(text)} lines of text ({wording}), {len(people)} faces, {'a' if sway else 'no'} camera sway"
+                f"{', line boil' if boil else ''}{', off: ' + ', '.join(sorted(off)) if off else ''}")
             # Hidden text is painted out of what moves; faded text is painted out under the text laid over it.
             erased, where = effects.plate(shown, text, lama) if wording != "keep" else (None, None)
             moving = erased if wording == "hide" else shown
@@ -404,12 +415,12 @@ def work(jobs, comfy, lama, faces, keep_labels, persons=None, scenes=None, finde
             sky = stars[2] if stars else np.zeros((side, side), np.float32)
             # People move as layers of their own over what is painted in behind them.
             words = [] if wording == "hide" else text
-            audience = crowd.Crowd(base, persons, words, lama, int(key[:8], 16))
+            audience = crowd.Crowd(base, persons if "people" not in off else None, words, lama, int(key[:8], 16))
             # Things that move on their own, each cut out; what bends sways in place, as curtains do.
             progress(0.11, "finding things that move (bees, clouds, flowers, trees)")
-            things = props.Props(audience.plate, finders, audience.anyone, words, lama, int(key[16:24] or "5", 16))
+            things = props.Props(audience.plate, finders if "things" not in off else None, audience.anyone, words, lama, int(key[16:24] or "5", 16))
             cut_out = np.maximum(audience.mask, things.mask)
-            shiny = effects.glints(base, np.maximum(np.maximum(covered, sky), cut_out))
+            shiny = effects.glints(base, np.maximum(np.maximum(covered, sky), cut_out)) if "glints" not in off else []
             # Jewelry shines wherever it is, on a person too (its glint moves with them); never on a face or text.
             bare = np.zeros((side, side), np.float32)
             for box in words:
@@ -417,14 +428,14 @@ def work(jobs, comfy, lama, faces, keep_labels, persons=None, scenes=None, finde
             for box in people:
                 bare = np.maximum(bare, motion.soft_box(side, box, 0, 0))
             progress(0.16, "finding jewelry")
-            pieces = props.jewelry(np.clip(base, 0, 255).astype(np.uint8), finders) if finders else []
+            pieces = props.jewelry(np.clip(base, 0, 255).astype(np.uint8), finders) if finders and "glints" not in off else []
             shiny += effects.jewel_glints(base, pieces, bare)
             # Fog and smoke drift as a smoke of their own laid over them, rather than being warped.
             progress(0.18, "finding fog and smoke")
-            haze = fog.Fog(base, finders, covered, int(key[4:12], 16), FPS)
+            haze = fog.Fog(base, finders if "fog" not in off else None, covered, int(key[4:12], 16), FPS)
             # Drips run, rather than being warped.
             progress(0.19, "finding drips")
-            drips = liquid.Drips(base, finders, covered, int(key[6:14], 16), FPS)
+            drips = liquid.Drips(base, finders if "drips" not in off else None, covered, int(key[6:14], 16), FPS)
             # Curtains sway on their own, around the text and people; solid things keep their shape.
             progress(0.20, "reading the scene (sky, water, curtains, solid things)")
             kinds = scene.Scene(base, scenes)
@@ -432,15 +443,18 @@ def work(jobs, comfy, lama, faces, keep_labels, persons=None, scenes=None, finde
             # Standing water stays still under waves laid over it in perspective.
             water = kinds.of(liquid.WATER) * (kinds.sure >= liquid.WATER_SURE) if kinds.kinds is not None else np.zeros((side, side), np.float32)
             water = np.maximum(water, liquid.water_found(base, finders, np.maximum(keep, cut_out)))
+            if "water" in off:
+                water = np.zeros((side, side), np.float32)
             waves = liquid.Waves(base, water, np.maximum(keep, cut_out), int(key[10:18], 16), FPS)
             progress(0.23, "cutting out curtains and trees")
-            drapes = scene.Curtains(things.plate, kinds.of({scene.CURTAIN}) > 0.5, keep, lama, int(key[8:16], 16))
-            trees = scene.Curtains(drapes.plate, things.bend, keep, lama, int(key[24:32] or "7", 16), stand=True)
+            swaying = "sway" not in off
+            drapes = scene.Curtains(things.plate, (kinds.of({scene.CURTAIN}) > 0.5) & swaying, keep, lama, int(key[8:16], 16))
+            trees = scene.Curtains(drapes.plate, things.bend & swaying, keep, lama, int(key[24:32] or "7", 16), stand=True)
             base = trees.plate
             found = ", ".join(f"{n} {k}" for k, n in sorted(things.count.items())) or "nothing else that moves"
             # The model's motion moves only what flows (sky, water); with too little of that it is not run at all.
             fluid = kinds.fluid()
-            flowing = fluid is None or float(fluid.mean()) >= scene.FLUID_LEAST
+            flowing = "model" not in off and (fluid is None or float(fluid.mean()) >= scene.FLUID_LEAST)
             say(f"{'a starfield' if stars else 'no starfield'}, {len(audience.people)} people ({audience.crowd} in a crowd), "
                 f"{'curtains' if drapes.mask.any() else 'no curtains'}, {found}, {len(shiny)} glints "
                 f"({len(pieces)} jewelry), {'fog' if haze.mask.any() else 'no fog'}, {drips.count} drips, "
@@ -481,7 +495,8 @@ def work(jobs, comfy, lama, faces, keep_labels, persons=None, scenes=None, finde
             for box in words:
                 boxes[extended.top:extended.top + side] = np.maximum(boxes[extended.top:extended.top + side], motion.soft_box(side, box, motion.TEXT_PAD, 0))
             text_in_frame = effects.unlit(boxes, OUT_W)
-            patches = effects.lights((OUT_H, OUT_W))
+            patches = effects.lights((OUT_H, OUT_W)) if "light" not in off else []
+            boiling = effects.Boil(side, int(key[2:10], 16)) if boil else None
             n = len(steps)
             clip = []
             for i, step in enumerate(steps):
@@ -501,6 +516,8 @@ def work(jobs, comfy, lama, faces, keep_labels, persons=None, scenes=None, finde
                     cover_frame = effects.faded(cover_frame, still, where, effects.shown_text(i, n))
                 elif wording == "spray":
                     cover_frame = effects.faded(cover_frame, still, where, sprayer.amount(effects.shown_text(i, n)))
+                if boiling:
+                    cover_frame = boiling.over(cover_frame, i, n)
                 frame = extended.frame(cover_frame)
                 # A glint rides on what it is on: a person it is on carries it, and a point of the cover shows
                 # where the flow brought it.
@@ -517,7 +534,8 @@ def work(jobs, comfy, lama, faces, keep_labels, persons=None, scenes=None, finde
             seeds = list(range(n))
             seeds[-1] = seeds[0]
             progress(0.96, "saving the clip")
-            encode([np.clip(np.round(motion.grained(f, s)), 0, 255).astype(np.uint8) for f, s in zip(clip, seeds)], jobs.clip(key))
+            grain = "grain" not in off
+            encode([np.clip(np.round(motion.grained(f, s) if grain else f), 0, 255).astype(np.uint8) for f, s in zip(clip, seeds)], jobs.clip(key))
             seconds = time.time() - started
             jobs.remember(key, names)
             progress(1.0, "done")
@@ -591,7 +609,7 @@ def handler(jobs):
                 return self.answer(400, {"error": "bad image"})
             png = self.rfile.read(length)
             query = parse_qs(urlparse(self.path).query)
-            names = {name: query[name][0].strip()[:200] for name in ("album", "artist", "text", "sway") if query.get(name)}
+            names = {name: query[name][0].strip()[:200] for name in ("album", "artist", "text", "sway", "off", "boil") if query.get(name)}
             say(f"{key} received from {self.client_address[0]}")
             self.answer(200, jobs.add(key, png, names))
 
