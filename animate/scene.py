@@ -50,8 +50,9 @@ SWAY, HANG_CURVE, FOLD, CYCLES = 0.008, 1.3, 0.3, 2
 STAND_SWAY, STAND_CURVE, STAND_LEAST, STAND_FOLD, STAND_CYCLES = 0.02, 1.6, 0.002, 0.25, 2
 # How far in from a curtain's edge it is painted in behind, beyond its sway, in pixels, and its soft edge.
 BEHIND_EXTRA, CURTAIN_SOFT = 3, 0.8
-# How far around what never moves (text, people) the sway eases off, as a share of the side.
-KEEP_EASE = 0.025
+# How far around what never moves (text, people) the sway eases off, and in from the cover's top and bottom, where
+# the still blur drawn out from them meets it (a treetop swaying at the edge made a line there), as shares of the side.
+KEEP_EASE, EDGE_EASE = 0.025, 0.08
 
 _model = {}
 
@@ -129,7 +130,8 @@ class Curtains:
             size, fold, self.cycles = hanging(found, y) * SWAY * side, FOLD, CYCLES
         calm = np.clip(gaussian_filter(np.clip(keep, 0, 1).astype(np.float32), KEEP_EASE * side) * 3, 0, 1)
         calm = np.maximum(calm, keep)
-        self.size = (size * (1 - calm)).astype(np.float32)
+        edge = np.clip(np.minimum(y, side - 1 - y) / (EDGE_EASE * side), 0, 1)
+        self.size = (size * (1 - calm) * edge * edge * (3 - 2 * edge)).astype(np.float32)
         rng = np.random.default_rng(seed)
         self.folds = [(2 * math.pi * (x / (fold * side) + 0.25 * y / (fold * side)) + rng.uniform(0, 2 * math.pi)).astype(np.float32),
                       (2 * math.pi * (x / (0.6 * fold * side) - 0.15 * y / (fold * side)) + rng.uniform(0, 2 * math.pi)).astype(np.float32)]

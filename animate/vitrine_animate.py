@@ -65,6 +65,8 @@ KEY = re.compile(r"^[0-9a-f]{16,64}$")
 # Wan 2.2 TI2V-5B works in multiples of 32 and 4n+1 frames at 24 fps; a 640 square fits an 8 GB card, and
 # 73 frames is three seconds. Its frames are only measured for their motion (motion.py).
 SIDE, FRAMES, FPS = 640, 73, 24
+# How long the video model takes before a run has been timed, in seconds (an RTX 4060 8 GB).
+MODEL_SECONDS = 240
 # How far motion eases to still toward a starfield, in pixels of the flow (motion.FLOW_SIZE).
 SKY_EASE = 4
 WIDTH, HEIGHT = SIDE, SIDE
@@ -130,8 +132,11 @@ class Jobs:
         if job["state"] == "queued":
             answer["position"] = self.queue.index(key) if key in self.queue else 0
         elif job["state"] == "running":
-            expected = sum(self.durations[-5:]) / len(self.durations[-5:]) if self.durations else 420.0
-            answer["progress"] = round(min(0.97, (time.time() - job["started"]) / expected), 3)
+            if "progress" in job:
+                answer["progress"] = round(min(0.99, job["progress"]), 3)
+            else:
+                expected = sum(self.durations[-5:]) / len(self.durations[-5:]) if self.durations else 420.0
+                answer["progress"] = round(min(0.97, (time.time() - job["started"]) / expected), 3)
         elif job["state"] == "failed":
             answer["error"] = job.get("error", "")
         return answer
@@ -143,6 +148,14 @@ class Jobs:
             key = self.queue.pop(0)
             self.state[key] = {"state": "running", "started": time.time()}
             return (key,) + self.images.pop(key)
+
+    def report(self, key, fraction, stage):
+        """How far the running job is, 0 to 1, and what it is doing: for the phone and the console's bar."""
+        with self.lock:
+            job = self.state.get(key)
+            if job and job["state"] == "running":
+                job["progress"] = fraction
+        bar(fraction, stage)
 
     def finish(self, key, seconds=None, error=None):
         with self.lock:
@@ -161,6 +174,7 @@ class Comfy:
         self.url = f"http://127.0.0.1:{port}"
         self.port = port
         self.process = None
+        self.took = []   # seconds the model took on the last runs, for the progress estimate
         with open(os.path.join(HERE, "workflow.json"), encoding="utf-8") as f:
             self.workflow = json.load(f)
 
@@ -194,7 +208,9 @@ class Comfy:
             time.sleep(1)
         stop("ComfyUI did not start within five minutes; see animate/comfyui.log")
 
-    def run(self, image_name, seed):
+    def run(self, image_name, seed, progress=None):
+        """The model's frames for the cover in ComfyUI's input folder. `progress`, when given, is told how far
+        along the model is, 0 to 1, as it waits: an estimate from how long the last runs took."""
         # ComfyUI can be gone since this server started (closed, or gone with the window that started it):
         # started again rather than the job failing.
         if not self.up():
@@ -223,8 +239,12 @@ class Comfy:
         request = urllib.request.Request(self.url + "/prompt", body, {"Content-Type": "application/json"})
         with urllib.request.urlopen(request, timeout=30) as r:
             prompt_id = json.load(r)["prompt_id"]
+        started = time.time()
+        expected = sum(self.took[-5:]) / len(self.took[-5:]) if self.took else MODEL_SECONDS
         while True:
             time.sleep(3)
+            if progress:
+                progress(min(0.98, (time.time() - started) / expected), time.time() - started)
             with urllib.request.urlopen(f"{self.url}/history/{prompt_id}", timeout=30) as r:
                 history = json.load(r).get(prompt_id)
             if not history:
@@ -240,6 +260,7 @@ class Comfy:
                         frames.append(os.path.join(self.root, "ComfyUI", "output", image.get("subfolder", ""), image["filename"]))
                 if not frames:
                     raise RuntimeError("ComfyUI finished without frames")
+                self.took.append(time.time() - started)
                 return sorted(frames)
 
 
@@ -268,8 +289,31 @@ def encode(frames, path):
     os.replace(partial, path)
 
 
+# The console's progress bar: one line written over as the job goes, its width in characters.
+BAR_WIDTH = 30
+_bar = {"shown": "", "length": 0}
+
+
+def bar(fraction, stage):
+    """The running job's progress as a bar on one line, written over in place; only when what it shows changes."""
+    fraction = min(max(fraction, 0.0), 1.0)
+    filled = int(round(fraction * BAR_WIDTH))
+    line = f"[{time.strftime('%H:%M:%S')}] [{'#' * filled}{'-' * (BAR_WIDTH - filled)}] {fraction * 100:3.0f}%  {stage}"
+    shown = line[11:]
+    if shown == _bar["shown"]:
+        return
+    _bar["shown"] = shown
+    sys.stdout.write("\r" + line + " " * max(0, _bar["length"] - len(line)))
+    sys.stdout.flush()
+    _bar["length"] = len(line)
+
+
 def say(text):
-    print(f"[{time.strftime('%H:%M:%S')}] {text}")
+    # A bar on the line is left as it was and the line goes on under it.
+    if _bar["length"]:
+        sys.stdout.write("\n")
+        _bar["length"], _bar["shown"] = 0, ""
+    print(f"[{time.strftime('%H:%M:%S')}] {text}", flush=True)
 
 
 def clean_cover(cover, names, lama, keep_labels):
@@ -300,7 +344,12 @@ def work(jobs, comfy, lama, faces, keep_labels, persons=None, scenes=None, finde
         say(f"animating {key} ({names.get('album') or 'no album name'})")
         image_name = f"vitrine_{key}.png"
         frames = []
+
+        def progress(fraction, stage, key=key):
+            jobs.report(key, fraction, stage)
+
         try:
+            progress(0.01, "reading the cover and its text")
             cover, lines = clean_cover(cover_of(png), names, lama, keep_labels)
             shown = shown_cover(cover)
             # Text and faces as boxes in shares of the cover's side; the trim it is shown with is a hair's.
@@ -322,12 +371,14 @@ def work(jobs, comfy, lama, faces, keep_labels, persons=None, scenes=None, finde
                 covered = np.maximum(covered, motion.soft_box(side, box, motion.TEXT_PAD, 0))
             for box in people:
                 covered = np.maximum(covered, motion.soft_box(side, box, motion.FACE_PAD, 0))
+            progress(0.06, "finding stars and people")
             stars = effects.starfield(base, covered)
             sky = stars[2] if stars else np.zeros((side, side), np.float32)
             # People move as layers of their own over what is painted in behind them.
             words = [] if wording == "hide" else text
             audience = crowd.Crowd(base, persons, words, lama, int(key[:8], 16))
             # Things that move on their own, each cut out; what bends sways in place, as curtains do.
+            progress(0.11, "finding things that move (bees, clouds, flowers, trees)")
             things = props.Props(audience.plate, finders, audience.anyone, words, lama, int(key[16:24] or "5", 16))
             cut_out = np.maximum(audience.mask, things.mask)
             shiny = effects.glints(base, np.maximum(np.maximum(covered, sky), cut_out))
@@ -337,13 +388,17 @@ def work(jobs, comfy, lama, faces, keep_labels, persons=None, scenes=None, finde
                 bare = np.maximum(bare, motion.soft_box(side, box, motion.TEXT_PAD, 0))
             for box in people:
                 bare = np.maximum(bare, motion.soft_box(side, box, 0, 0))
+            progress(0.16, "finding jewelry")
             pieces = props.jewelry(np.clip(base, 0, 255).astype(np.uint8), finders) if finders else []
             shiny += effects.jewel_glints(base, pieces, bare)
             # Fog and smoke drift as a smoke of their own laid over them, rather than being warped.
+            progress(0.18, "finding fog and smoke")
             haze = fog.Fog(base, finders, covered, int(key[4:12], 16), FPS)
             # Curtains sway on their own, around the text and people; solid things keep their shape.
+            progress(0.20, "reading the scene (sky, water, curtains, solid things)")
             kinds = scene.Scene(base, scenes)
             keep = np.maximum((covered > 0).astype(np.float32), audience.anyone)
+            progress(0.23, "cutting out curtains and trees")
             drapes = scene.Curtains(things.plate, kinds.of({scene.CURTAIN}) > 0.5, keep, lama, int(key[8:16], 16))
             trees = scene.Curtains(drapes.plate, things.bend, keep, lama, int(key[24:32] or "7", 16), stand=True)
             base = trees.plate
@@ -357,7 +412,8 @@ def work(jobs, comfy, lama, faces, keep_labels, persons=None, scenes=None, finde
                 f"{'the model moving ' + ('everything else' if fluid is None else f'{fluid.mean():.0%} sky and water') if flowing else 'no model motion'}")
             if flowing:
                 seed = int(key[:12], 16) % (2 ** 31) + random.randint(0, 999)
-                frames = comfy.run(image_name, seed)
+                frames = comfy.run(image_name, seed, lambda done, seconds: progress(
+                    0.25 + 0.5 * done, f"the video model moving the sky and water ({seconds:.0f} s)"))
             pictures = [np.asarray(Image.open(f).convert("RGB"), dtype=np.float32) for f in frames]
             # The model's first frame is a little off from the rest (Wan's VAE makes it alone): measured from
             # the second. The starfield holds still under its own drift, and what moves in front of it eases to
@@ -376,6 +432,7 @@ def work(jobs, comfy, lama, faces, keep_labels, persons=None, scenes=None, finde
             still_sky = np.maximum(still_sky, np.maximum(np.clip(hung * 2, 0, 1), solid))
             if fluid is not None:
                 still_sky = np.maximum(still_sky, 1 - cv2.resize(fluid, (motion.FLOW_SIZE, motion.FLOW_SIZE), interpolation=cv2.INTER_AREA))
+            progress(0.76, "measuring the model's motion" if flowing else "no video model needed")
             if flowing:
                 steps = effects.lengthened(motion.loop(pictures[1:], [] if wording == "hide" else text, people, still_sky))
             else:
@@ -391,6 +448,7 @@ def work(jobs, comfy, lama, faces, keep_labels, persons=None, scenes=None, finde
             n = len(steps)
             clip = []
             for i, step in enumerate(steps):
+                progress(0.78 + 0.17 * i / n, f"drawing frame {i + 1} of {n}")
                 cover_frame = motion.warped(base, step)
                 if stars:
                     cover_frame = effects.with_stars(cover_frame, stars, i, n)
@@ -417,8 +475,10 @@ def work(jobs, comfy, lama, faces, keep_labels, persons=None, scenes=None, finde
             # The last frame is the first; its grain is too, so the two are the same frame.
             seeds = list(range(n))
             seeds[-1] = seeds[0]
+            progress(0.96, "saving the clip")
             encode([np.clip(np.round(motion.grained(f, s)), 0, 255).astype(np.uint8) for f, s in zip(clip, seeds)], jobs.clip(key))
             seconds = time.time() - started
+            progress(1.0, "done")
             jobs.finish(key, seconds=seconds)
             say(f"saved {key}.mp4 in {seconds / 60:.1f} min")
         except Exception as error:  # the phone shows Failed and the log says why
