@@ -573,7 +573,11 @@ static void show(NSString *track, NSURL *file) {
     NSUInteger begun = sg_begun;
     SGMotionPoster(file, ^(UIImage *poster) {
         // A walk begun while the poster was read (switched off, Spotify's video) has the say.
-        if (!poster || poster.size.width <= 0 || begun != sg_begun) return;
+        if (!poster || poster.size.width <= 0 || begun != sg_begun) {
+            SGLog(@"redesign player: animated artwork %@ not shown (%@)", file.lastPathComponent,
+                  begun != sg_begun ? @"another track's walk began" : @"no first frame read");
+            return;
+        }
         clear(YES);
         sg_motion = [[SGRPlayerMotionView alloc] initWithFrame:CGRectZero];
         sg_shown = track;

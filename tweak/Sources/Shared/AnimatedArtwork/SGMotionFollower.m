@@ -58,7 +58,10 @@
     _source = nil;
     NSUInteger walk = ++_walk;
     _walked = _begin(uri, state);
-    if (!_walked) return;
+    if (!_walked) {
+        if (SGLocalFileIs(uri)) SGLog(@"motion: a local file not walked, its screen wants no clip now");
+        return;
+    }
     NSDictionary *metadata = [state.track.metadata isKindOfClass:NSDictionary.class] ? state.track.metadata : nil;
     NSString *picture = SGAnimatedCoverPicture(uri, metadata);
     _picture = picture;
@@ -72,6 +75,8 @@
     if (SGLocalFileIs(uri)) {
         NSDictionary *info = SGLocalFileInfo(uri);
         NSURL *file = SGAnimatedCoverFile(picture) ?: SGAnimatedCoverFileForAlbum(info[@"artist"], info[@"album"]);
+        SGLog(@"motion: a local file of \"%@\" by \"%@\", its album's cover %@", info[@"album"], info[@"artist"],
+              file ? file.lastPathComponent : @"not saved");
         dispatch_async(dispatch_get_main_queue(), ^{
             SGMotionFollower *follower = weakSelf;
             if (follower && walk == follower->_walk) follower->_found(uri, file);
