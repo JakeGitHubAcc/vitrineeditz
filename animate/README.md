@@ -10,9 +10,9 @@ name and artist, and this:
   are moved along the clip's optical flow (`motion.py`), so its colors and detail stay its own. The
   camera's part of the motion is taken out and the rest softened and capped; text does not move and
   faces move only as a whole. The end turns back along the motion, so the clip ends on its first frame;
-- cuts a crowd's people out, each on their own, and has each sway slowly from where they stand and
-  breathe, over the background painted in behind them (`crowd.py`); the main person, larger, still only
-  breathes;
+- cuts people out, each on their own, over the background painted in behind them (`crowd.py`): a
+  crowd's people sway slowly from where they stand and breathe, and the main person only breathes and
+  sways a hair, so no body is bent out of shape;
 - has curtains sway on their own, as fabric hanging does, and keeps the model's motion off solid things
   such as a stage, a floor or walls, so their shape stays (`scene.py`);
 - paints the cover on a little above and below it and fades that into a smooth blur (`frame.py`);

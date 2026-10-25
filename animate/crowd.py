@@ -1,9 +1,9 @@
-"""A crowd's people, each cut out of the cover and moved whole. The model's motion warps a crowd into a
-smear of reshaped heads and shoulders; here each person found in it is a layer of their own that slowly
-sways from where they stand and breathes, and what is behind them is painted in (LaMa) for the little that
-their moving shows. People are found with Mask R-CNN (torchvision, COCO); a crowd is at least CROWD_LEAST
-people, and only those who are small in the picture are its members: the main person, larger, still moves
-with the model's motion (motion.py). The nearer of two people (lower in the picture) is in front.
+"""The cover's people, each cut out and moved whole. The model's motion bends a body out of shape and
+warps a crowd into a smear of reshaped heads and shoulders; here each person is a layer of their own that
+slowly sways from where they stand and breathes, and what is behind them is painted in (LaMa) for the
+little that their moving shows. People are found with Mask R-CNN (torchvision, COCO). A crowd's members
+(at least CROWD_LEAST people, each small in the picture) sway freely; anyone else, such as the main
+person, only breathes and sways a hair. The nearer of two people (lower in the picture) is in front.
 
 Each person's motion is a turn about where they stand and a slight stretch from there, so their feet (or
 the cover's edge, where they are cut off) stay where they are, and is made of whole cycles of the loop
@@ -26,6 +26,8 @@ OUTLINE_LOW, OUTLINE_HIGH, OUTLINE_SOFT = 0.25, 0.6, 0.7
 # How far each sways, in degrees (the least and most, each person picked between), how much they breathe
 # (a stretch up from where they stand, as a share of their height), and how many times over the loop.
 SWAY_LEAST, SWAY_MOST, BREATH, CYCLES = 2.0, 3.6, 0.012, (2, 3)
+# The same for anyone not in a crowd.
+MAIN_SWAY_LEAST, MAIN_SWAY_MOST, MAIN_BREATH, MAIN_CYCLES = 0.25, 0.45, 0.005, (2,)
 # How far past each person the cover is painted in, in pixels, for their soft edge and hair.
 BEHIND_GROW = 3
 # What no person who overlaps it this much moves over: a line of text.
@@ -62,7 +64,7 @@ def overlap(a, b):
 
 
 class Crowd:
-    """The crowd in `cover` (float RGB, square), or none (`self.people` empty). `text` are the boxes of its
+    """The people in `cover` (float RGB, square), or none (`self.people` empty). `text` are the boxes of its
     text, in shares of the side; `seed` picks how each person moves."""
 
     def __init__(self, cover, path, text, lama, seed):
@@ -77,7 +79,9 @@ class Crowd:
         for chance, _ in everyone:
             self.anyone = np.maximum(self.anyone, (chance > 0.5).astype(np.float32))
         small = [i for i, (_, box) in enumerate(everyone) if (box[3] - box[1]) / side <= CROWD_TALLEST]
-        if len(small) < CROWD_LEAST:
+        crowd = set(small) if len(small) >= CROWD_LEAST else set()
+        self.crowd = 0
+        if not everyone:
             return
         # Each pixel is the one person's whose mask is surest of it, the main person's included, so two
         # people never both take it.
@@ -85,7 +89,7 @@ class Crowd:
         owner = chances.argmax(axis=0)
         rng = np.random.default_rng(seed)
         # Back to front: the lower in the picture, the nearer.
-        for i in sorted(small, key=lambda i: (everyone[i][1][1] + everyone[i][1][3]) / 2):
+        for i in sorted(range(len(everyone)), key=lambda i: (everyone[i][1][1] + everyone[i][1][3]) / 2):
             chance, box = everyone[i]
             if any(overlap(box / side, line) > TEXT_OVERLAP for line in text):
                 continue
@@ -95,15 +99,19 @@ class Crowd:
                 continue
             l, t, r, b = box
             tall = b - t
-            cycles = int(rng.choice(CYCLES))
+            member = i in crowd
+            self.crowd += member
+            least, most, breath, cycles = ((SWAY_LEAST, SWAY_MOST, BREATH, CYCLES) if member else
+                                           (MAIN_SWAY_LEAST, MAIN_SWAY_MOST, MAIN_BREATH, MAIN_CYCLES))
             self.people.append({
                 "outline": outline,
                 "box": (l, t, r, b),
                 # Where they stand: the bottom of their box, which is the cover's edge where they are cut off.
                 "pivot": ((l + r) / 2, min(b, side - 1)),
                 "tall": tall,
-                "sway": rng.uniform(SWAY_LEAST, SWAY_MOST) * rng.choice((-1, 1)),
-                "cycles": cycles,
+                "sway": rng.uniform(least, most) * rng.choice((-1, 1)),
+                "breath": breath,
+                "cycles": int(rng.choice(cycles)),
                 "phases": rng.uniform(0, 2 * math.pi, 3),
             })
             self.mask = np.maximum(self.mask, outline)
@@ -119,8 +127,8 @@ class Crowd:
         self.plate = (cover * (1 - soft) + filled * soft).astype(np.float32)
         # Each person's own picture, which stays the cover's pixels; past the cover's edge, its edge drawn out.
         # The farthest any of them moves: a wave runs up to twice its size from where it starts.
-        self.reach = int(math.ceil(max(2 * math.radians(SWAY_MOST) * (p["tall"] + (p["box"][2] - p["box"][0]) / 2)
-                                       + 2 * BREATH * p["tall"] for p in self.people))) + 4
+        self.reach = int(math.ceil(max(2 * math.radians(abs(p["sway"])) * (p["tall"] + (p["box"][2] - p["box"][0]) / 2)
+                                       + 2 * p["breath"] * p["tall"] for p in self.people))) + 4
         pad = self.reach
         self.padded = cv2.copyMakeBorder(cover.astype(np.float32), pad, pad, pad, pad, cv2.BORDER_REPLICATE)
         for p in self.people:
@@ -133,7 +141,7 @@ class Crowd:
         def wave(cycles, phase):
             return math.sin(2 * math.pi * cycles * t + phase) - math.sin(phase)
         turn = p["sway"] * (0.75 * wave(c, a) + 0.25 * wave(c + 1, b))
-        stretch = 1 + BREATH * wave(c, s)
+        stretch = 1 + p["breath"] * wave(c, s)
         return turn, stretch
 
     def over(self, frame, i, n):
