@@ -7,7 +7,8 @@ and artist; this server queues it and makes its loop:
    (catalog.py), else the label painted out (label.py);
 2. what moves: Wan 2.2 TI2V-5B in ComfyUI (workflow.json) animates the cover, and the optical flow of its
    frames, softened, with text and faces held, moves the cover's own pixels (motion.py), so its colors,
-   detail and faces stay its own; the end turns back along the motion to the first frame;
+   detail and faces stay its own; the end turns back along the motion to the first frame; a crowd's
+   people are each cut out and sway whole (crowd.py);
 3. the lock screen's 3:4 frame around it (frame.py); what the phone's Text and Camera sway settings ask
    for, a starfield's drift, glints on shiny things and a slow shift of the light (effects.py); and a
    light film grain;
@@ -48,6 +49,7 @@ from PIL import Image
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import catalog  # noqa: E402
+import crowd  # noqa: E402
 import effects  # noqa: E402
 import label  # noqa: E402
 import motion  # noqa: E402
@@ -276,7 +278,7 @@ def clean_cover(cover, names, lama, keep_labels):
     return cover, lines
 
 
-def work(jobs, comfy, lama, faces, keep_labels):
+def work(jobs, comfy, lama, faces, keep_labels, persons=None):
     inputs = os.path.join(comfy.root, "ComfyUI", "input")
     while True:
         key, png, names = jobs.next()
@@ -308,8 +310,11 @@ def work(jobs, comfy, lama, faces, keep_labels):
                 covered = np.maximum(covered, motion.soft_box(side, box, motion.FACE_PAD, 0))
             stars = effects.starfield(base, covered)
             sky = stars[2] if stars else np.zeros((side, side), np.float32)
-            shiny = effects.glints(base, np.maximum(covered, sky))
-            say(f"{'a starfield' if stars else 'no starfield'}, {len(shiny)} glints")
+            # A crowd's people move as layers of their own over what is painted in behind them.
+            audience = crowd.Crowd(base, persons, [] if wording == "hide" else text, lama, int(key[:8], 16))
+            shiny = effects.glints(base, np.maximum(np.maximum(covered, sky), audience.mask))
+            base = audience.plate
+            say(f"{'a starfield' if stars else 'no starfield'}, {len(audience.people)} people in a crowd, {len(shiny)} glints")
             seed = int(key[:12], 16) % (2 ** 31) + random.randint(0, 999)
             frames = comfy.run(image_name, seed)
             pictures = [np.asarray(Image.open(f).convert("RGB"), dtype=np.float32) for f in frames]
@@ -318,6 +323,10 @@ def work(jobs, comfy, lama, faces, keep_labels):
             # still toward it rather than at its edge, where a stop pulled the edge out into a streak.
             still_sky = np.asarray(Image.fromarray((sky * 255).astype(np.uint8)).resize((motion.FLOW_SIZE, motion.FLOW_SIZE)), dtype=np.float32) / 255
             still_sky = np.maximum(still_sky, cv2.GaussianBlur(still_sky, (0, 0), SKY_EASE))
+            # Behind the crowd nothing moves but the people laid over it.
+            behind = cv2.resize(audience.mask, (motion.FLOW_SIZE, motion.FLOW_SIZE), interpolation=cv2.INTER_AREA)
+            behind = np.maximum(behind, cv2.GaussianBlur(behind, (0, 0), SKY_EASE))
+            still_sky = np.maximum(still_sky, np.clip(behind * 2, 0, 1))
             steps = effects.lengthened(motion.loop(pictures[1:], [] if wording == "hide" else text, people, still_sky))
             still = np.asarray(shown, dtype=np.float32)
             # The light leaves text alone, where it is in the frame.
@@ -330,6 +339,7 @@ def work(jobs, comfy, lama, faces, keep_labels):
                 cover_frame = motion.warped(base, step)
                 if stars:
                     cover_frame = effects.with_stars(cover_frame, stars, i, n)
+                cover_frame = audience.over(cover_frame, i, n)
                 if wording == "fade":
                     cover_frame = effects.faded(cover_frame, still, where, effects.shown_text(i, n))
                 frame = extended.frame(cover_frame)
@@ -442,6 +452,7 @@ def main():
     parser.add_argument("--comfy-port", type=int, default=8188)
     parser.add_argument("--lama", help="big-lama.pt, which paints labels out and the cover on past its edges")
     parser.add_argument("--faces", help="face_detection_yunet_2023mar.onnx, which finds faces to keep whole")
+    parser.add_argument("--people", help="maskrcnn_resnet50_fpn_v2_coco-73cbd019.pth, which finds a crowd's people to move whole")
     parser.add_argument("--keep-labels", action="store_true", help="leave Parental Advisory labels on covers")
     args = parser.parse_args()
     os.makedirs(args.clips, exist_ok=True)
@@ -451,10 +462,13 @@ def main():
     faces = args.faces if args.faces and os.path.exists(args.faces) else None
     if not faces:
         print(f"No face model at {args.faces}: faces move with the rest (see README.md).")
+    persons = args.people if args.people and os.path.exists(args.people) else None
+    if not persons:
+        print(f"No person model at {args.people}: a crowd moves with the model's motion (see README.md).")
     jobs = Jobs(args.clips)
     comfy = Comfy(args.comfy, args.comfy_port)
     comfy.start()
-    threading.Thread(target=work, args=(jobs, comfy, lama, faces, args.keep_labels), daemon=True).start()
+    threading.Thread(target=work, args=(jobs, comfy, lama, faces, args.keep_labels, persons), daemon=True).start()
     server = ThreadingHTTPServer((args.host, args.port), handler(jobs))
     print()
     print(f"Vitrine Animate is running. In Vitrine's lock screen settings, set Computer to:  {lan_address()}:{args.port}")
