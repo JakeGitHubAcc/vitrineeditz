@@ -14,7 +14,7 @@ import math
 
 import cv2
 import numpy as np
-from scipy.ndimage import gaussian_filter
+from scipy.ndimage import binary_closing, binary_fill_holes, gaussian_filter, gaussian_filter1d
 from scipy.ndimage import label as components
 
 import props
@@ -38,18 +38,25 @@ WATER = {"sea", "water", "river", "lake", "swimming pool"}
 # finder's scores for water move with the words asked, and a box over the whole cover was a background it took for
 # water (+44's, 0.79), where the flood on To the Stars is its lower part (0.52).
 WATER_WORDS, WATER_SCORE, WATER_BOX = ("water",), 0.3, 0.85
+# How far in a bite out of the water's outline is closed, as a share of the side.
+WATER_CLOSE = 0.05
 # How sure the scene model must be, the least share of the cover water must be, and its soft edge in pixels.
 WATER_SURE, WATER_LEAST, WATER_SOFT = 0.5, 0.02, 3
 # The sea's surface: its tile's cells and size in metres, the wind's speed (m/s) and direction (radians, 0 across),
 # the smallest wave kept (m), how many times the tile repeats across the cover's width at the bottom, how much the
 # plane is stretched away from the eye, and how fast the waves go against deep water's own speed.
-SEA_N, SEA_SIZE, SEA_SPEED, SEA_WIND, SEA_SMALLEST, SEA_TILES, SEA_STRETCH, SEA_PACE = 256, 40.0, 6.0, 1.2, 0.05, 3.0, 0.45, 0.35
+SEA_N, SEA_SIZE, SEA_SPEED, SEA_WIND, SEA_SMALLEST, SEA_TILES, SEA_STRETCH, SEA_PACE = 256, 30.0, 7.0, 1.2, 0.02, 3.5, 0.45, 0.35
 # How far the water's own detail is smoothed (a share of the side), how high the eye is over the plane (how flat the
 # view is), how much a slope turns the light, the water's reflectance head on (Schlick's F0), how strongly the
 # reflection and a ripple's own light and shade change the water, where a glint starts (in the ripples' spreads)
 # and how strong it is, and how far in from the horizon the waves fade in (a share of the water's depth).
 SEA_SMOOTH, SEA_EYE, SEA_TILT, SEA_F0 = 0.02, 0.35, 2.5, 0.02
-SEA_AMOUNT, SEA_RIPPLE, SEA_SHINE, SEA_GLINT, WAVE_HORIZON = 0.5, 0.16, 2.4, 0.04, 0.12
+# The most a ripple's reflection lightens or darkens the water, as a share of its tone.
+SEA_REFLECT_MOST = 0.8
+# The least water a row must have to give the water its tone there, in pixels.
+SEA_ROW_LEAST = 8
+# How sharp a ripple's edge is (below 1 the light turns quickly between its sides, choppy like the cover's own water).
+SEA_AMOUNT, SEA_RIPPLE, SEA_SHINE, SEA_GLINT, WAVE_HORIZON, SEA_EDGE = 0.5, 0.5, 1.2, 0.14, 0.12, 0.5
 # How far around faces and text, and in from the cover's top and bottom, the waves ease off, as shares of the side.
 KEEP_EASE, EDGE_EASE = 0.03, 0.06
 
@@ -66,8 +73,15 @@ def water_found(cover, path, keep):
              if any(word in name for word in WATER_WORDS) and (box[2] - box[0]) * (box[3] - box[1]) <= WATER_BOX * side ** 2]
     if not boxes:
         return found
-    for outline in props.outlines(pixels, path, boxes):
-        found = np.maximum(found, outline.astype(np.float32))
+    for box, outline in zip(boxes, props.outlines(pixels, path, boxes)):
+        # SAM leaves out the water's brightest reflections, which the sea then went round, left as a white blob (To the
+        # Stars): what it leaves out inside the water, or bitten out of its edge, is filled, within the finder's box.
+        reach = max(1, int(round(WATER_CLOSE * side)))
+        whole = binary_fill_holes(binary_closing(outline, iterations=reach))
+        inside_box = np.zeros((side, side), bool)
+        l, t, r, b = (int(round(v)) for v in box)
+        inside_box[max(0, t):b, max(0, l):r] = True
+        found = np.maximum(found, (whole & inside_box).astype(np.float32))
     return found * (keep < 0.5)
 
 
@@ -204,12 +218,22 @@ class Waves:
         if not len(ys):
             return
         self.mask = mask.astype(np.float32)
-        # The water's own colors without its detail: blurred within the water only, so nothing around it bleeds in.
-        inside = (water > 0.5).astype(np.float32)
-        spread = SEA_SMOOTH * side
-        weight = gaussian_filter(inside, spread)
-        smooth = np.stack([gaussian_filter(cover[..., c] * inside, spread) for c in range(3)], -1) / np.maximum(weight, 1e-4)[..., None]
-        self.smooth = np.where(weight[..., None] > 1e-3, smooth, cover).astype(np.float32)
+        # The water's own colors without its detail: one tone a row, the median of the water's pixels in it, smoothed
+        # down the rows, so the water lightens or darkens with distance only. Blurred where it was, a bright reflection
+        # stayed a bright blob (To the Stars).
+        inside = water > 0.5
+        tone = np.full((side, 3), np.nan, np.float32)
+        for row in range(side):
+            if inside[row].sum() >= SEA_ROW_LEAST:
+                tone[row] = np.median(cover[row][inside[row]], axis=0)
+        known = np.nonzero(~np.isnan(tone[:, 0]))[0]
+        if not len(known):
+            self.mask[:] = 0
+            return
+        for c in range(3):
+            tone[:, c] = np.interp(np.arange(side), known, tone[known, c])
+        tone = gaussian_filter1d(tone, SEA_SMOOTH * side, axis=0)
+        self.smooth = np.repeat(tone[:, None, :], side, axis=1).astype(np.float32)
         # The plane: the horizon is the top of the water, and a pixel's distance on the plane grows toward it.
         horizon = float(ys.min())
         y, x = np.mgrid[0:side, 0:side].astype(np.float32)
@@ -265,13 +289,17 @@ class Waves:
         norm = np.sqrt(sx * sx + 1 + sz * sz)
         facing = np.clip((self.view_y - sz) / norm, 0, 1)
         fresnel = SEA_F0 + (1 - SEA_F0) * (1 - facing) ** 5
-        inside = self.mask > 0.5
-        mean = float(fresnel[inside].mean()) if inside.any() else 0.5
+        # Against flat water seen from the same place: the row's tone is already the cover's own brightness there, so
+        # the reflection only says how a ripple changes it. Against the whole water's mean instead, the near-mirror
+        # reflection toward the horizon blew the far water out to a white blob (To the Stars).
+        flat = SEA_F0 + (1 - SEA_F0) * (1 - self.view_y) ** 5
+        reflected = np.clip(fresnel / np.maximum(flat, SEA_F0) - 1, -SEA_REFLECT_MOST, SEA_REFLECT_MOST)
         # Seen nearly from above, the reflection hardly changes over a ripple (the near water was a plain blur), so
         # each ripple is also lit on the side facing the light and shaded on the other, measured in its own spread.
         spread = float(np.sqrt((slope_x ** 2 + slope_z ** 2).mean())) * SEA_TILT + 1e-6
         ripple = (sz * 0.8 + sx * 0.6) / spread
-        light = 1 + SEA_AMOUNT * (fresnel / max(mean, 1e-3) - 1) + SEA_RIPPLE * ripple
+        ripple = np.sign(ripple) * np.abs(ripple) ** SEA_EDGE
+        light = 1 + SEA_AMOUNT * reflected + SEA_RIPPLE * ripple
         glint = np.clip(ripple - SEA_SHINE, 0, None) ** 2 * self.detail
         sea = self.smooth * light[..., None] + 255 * SEA_GLINT * glint[..., None]
         m = self.mask[..., None]
