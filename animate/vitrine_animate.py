@@ -168,7 +168,8 @@ class Comfy:
         except OSError:
             return False
 
-    def start(self):
+    def start(self, stop=sys.exit):
+        """ComfyUI up, started if it is not; `stop` with why, if it does not start."""
         if self.up():
             print(f"Using the ComfyUI already running at {self.url}")
             return
@@ -185,11 +186,18 @@ class Comfy:
                 print("ComfyUI is ready.")
                 return
             if self.process.poll() is not None:
-                sys.exit("ComfyUI stopped while starting; see animate/comfyui.log")
+                stop("ComfyUI stopped while starting; see animate/comfyui.log")
+                return
             time.sleep(1)
-        sys.exit("ComfyUI did not start within five minutes; see animate/comfyui.log")
+        stop("ComfyUI did not start within five minutes; see animate/comfyui.log")
 
     def run(self, image_name, seed):
+        # ComfyUI can be gone since this server started (closed, or gone with the window that started it):
+        # started again rather than the job failing.
+        if not self.up():
+            def stop(why):
+                raise RuntimeError(why)
+            self.start(stop)
         graph = copy.deepcopy(self.workflow)
         for node in graph.values():
             inputs = node["inputs"]
