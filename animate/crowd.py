@@ -144,6 +144,21 @@ class Crowd:
         stretch = 1 + p["breath"] * wave(c, s)
         return turn, stretch
 
+    def follow(self, x, y, i, n):
+        """Where the cover's point (`x`, `y`) is in frame `i` of `n`: moved with the person it is on (the
+        nearest, drawn last), or where it was."""
+        pad = self.reach if self.people else 0
+        for p in reversed(self.people):
+            row, col = int(round(y)) + pad, int(round(x)) + pad
+            if not (0 <= row < p["outline"].shape[0] and 0 <= col < p["outline"].shape[1]) or p["outline"][row, col] < 0.5:
+                continue
+            turn, stretch = self.moved(p, i, n)
+            rad = math.radians(turn)
+            dx, dy = x - p["pivot"][0], (y - p["pivot"][1]) * stretch
+            return (p["pivot"][0] + math.cos(rad) * dx - math.sin(rad) * dy,
+                    p["pivot"][1] + math.sin(rad) * dx + math.cos(rad) * dy)
+        return x, y
+
     def over(self, frame, i, n):
         """`frame` (the cover's animation, float RGB at the cover's side, moved over self.plate) with each
         person laid over it where they are in frame `i` of `n`."""

@@ -53,6 +53,7 @@ sys.path.insert(0, HERE)
 import catalog  # noqa: E402
 import crowd  # noqa: E402
 import effects  # noqa: E402
+import fog  # noqa: E402
 import label  # noqa: E402
 import motion  # noqa: E402
 import props  # noqa: E402
@@ -330,6 +331,16 @@ def work(jobs, comfy, lama, faces, keep_labels, persons=None, scenes=None, finde
             things = props.Props(audience.plate, finders, audience.anyone, words, lama, int(key[16:24] or "5", 16))
             cut_out = np.maximum(audience.mask, things.mask)
             shiny = effects.glints(base, np.maximum(np.maximum(covered, sky), cut_out))
+            # Jewelry shines wherever it is, on a person too (its glint moves with them); never on a face or text.
+            bare = np.zeros((side, side), np.float32)
+            for box in words:
+                bare = np.maximum(bare, motion.soft_box(side, box, motion.TEXT_PAD, 0))
+            for box in people:
+                bare = np.maximum(bare, motion.soft_box(side, box, 0, 0))
+            pieces = props.jewelry(np.clip(base, 0, 255).astype(np.uint8), finders) if finders else []
+            shiny += effects.jewel_glints(base, pieces, bare)
+            # Fog and smoke drift as a smoke of their own laid over them, rather than being warped.
+            haze = fog.Fog(base, finders, covered, int(key[4:12], 16), FPS)
             # Curtains sway on their own, around the text and people; solid things keep their shape.
             kinds = scene.Scene(base, scenes)
             keep = np.maximum((covered > 0).astype(np.float32), audience.anyone)
@@ -337,10 +348,16 @@ def work(jobs, comfy, lama, faces, keep_labels, persons=None, scenes=None, finde
             trees = scene.Curtains(drapes.plate, things.bend, keep, lama, int(key[24:32] or "7", 16), stand=True)
             base = trees.plate
             found = ", ".join(f"{n} {k}" for k, n in sorted(things.count.items())) or "nothing else that moves"
+            # The model's motion moves only what flows (sky, water); with too little of that it is not run at all.
+            fluid = kinds.fluid()
+            flowing = fluid is None or float(fluid.mean()) >= scene.FLUID_LEAST
             say(f"{'a starfield' if stars else 'no starfield'}, {len(audience.people)} people ({audience.crowd} in a crowd), "
-                f"{'curtains' if drapes.mask.any() else 'no curtains'}, {found}, {len(shiny)} glints")
-            seed = int(key[:12], 16) % (2 ** 31) + random.randint(0, 999)
-            frames = comfy.run(image_name, seed)
+                f"{'curtains' if drapes.mask.any() else 'no curtains'}, {found}, {len(shiny)} glints "
+                f"({len(pieces)} jewelry), {'fog' if haze.mask.any() else 'no fog'}, "
+                f"{'the model moving ' + ('everything else' if fluid is None else f'{fluid.mean():.0%} sky and water') if flowing else 'no model motion'}")
+            if flowing:
+                seed = int(key[:12], 16) % (2 ** 31) + random.randint(0, 999)
+                frames = comfy.run(image_name, seed)
             pictures = [np.asarray(Image.open(f).convert("RGB"), dtype=np.float32) for f in frames]
             # The model's first frame is a little off from the rest (Wan's VAE makes it alone): measured from
             # the second. The starfield holds still under its own drift, and what moves in front of it eases to
@@ -357,7 +374,12 @@ def work(jobs, comfy, lama, faces, keep_labels, persons=None, scenes=None, finde
             hung = np.maximum(hung, cv2.GaussianBlur(hung, (0, 0), SKY_EASE))
             solid = cv2.resize(kinds.solid(), (motion.FLOW_SIZE, motion.FLOW_SIZE), interpolation=cv2.INTER_AREA)
             still_sky = np.maximum(still_sky, np.maximum(np.clip(hung * 2, 0, 1), solid))
-            steps = effects.lengthened(motion.loop(pictures[1:], [] if wording == "hide" else text, people, still_sky))
+            if fluid is not None:
+                still_sky = np.maximum(still_sky, 1 - cv2.resize(fluid, (motion.FLOW_SIZE, motion.FLOW_SIZE), interpolation=cv2.INTER_AREA))
+            if flowing:
+                steps = effects.lengthened(motion.loop(pictures[1:], [] if wording == "hide" else text, people, still_sky))
+            else:
+                steps = effects.lengthened([np.zeros((motion.FLOW_SIZE, motion.FLOW_SIZE, 2), np.float32)] * FRAMES)
             still = np.asarray(shown, dtype=np.float32)
             # The light leaves text alone, where it is in the frame, and eases off toward it; faces take it
             # as the rest does. A hard box here showed as a lighter or darker rectangle.
@@ -377,13 +399,17 @@ def work(jobs, comfy, lama, faces, keep_labels, persons=None, scenes=None, finde
                 cover_frame = trees.over(cover_frame, i, n)
                 cover_frame = audience.over(cover_frame, i, n)
                 cover_frame = things.over(cover_frame, i, n, front=True)
+                cover_frame = haze.over(cover_frame, i, n)
                 if wording == "fade":
                     cover_frame = effects.faded(cover_frame, still, where, effects.shown_text(i, n))
                 frame = extended.frame(cover_frame)
-                # A glint rides on what it is on: a point of the cover shows where the flow brought it.
+                # A glint rides on what it is on: a person it is on carries it, and a point of the cover shows
+                # where the flow brought it.
                 places = []
                 for x, y in shiny:
-                    fx, fy = step[min(int(y / side * motion.FLOW_SIZE), motion.FLOW_SIZE - 1), min(int(x / side * motion.FLOW_SIZE), motion.FLOW_SIZE - 1)]
+                    x, y = audience.follow(x, y, i, n)
+                    row = min(max(int(y / side * motion.FLOW_SIZE), 0), motion.FLOW_SIZE - 1)
+                    fx, fy = step[row, min(max(int(x / side * motion.FLOW_SIZE), 0), motion.FLOW_SIZE - 1)]
                     places.append((x - fx * side, y - fy * side))
                 frame = effects.with_glints(frame, places, i, n, offset=(0, extended.top))
                 frame = effects.lit(frame, patches, i, n, text_in_frame)

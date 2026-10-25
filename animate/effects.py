@@ -157,6 +157,9 @@ STAR_SIZE = 25
 GLINT_BRIGHT, GLINT_LIFT, GLINT_GROUND, GLINT_LEAST, GLINT_SIZE = 235, 110, 100, 10, 60
 GLINTS, GLINT_APART = 2, 0.12
 GLINT_REACH, GLINT_SECONDS, GLINT_STRENGTH = 0.045, 0.9, 0.9
+# Jewelry's glints: at most this many, this far apart as a share of the side, on a highlight at least this
+# bright out of 255.
+JEWEL_GLINTS, JEWEL_APART, JEWEL_BRIGHT = 3, 0.035, 150
 # The light: this many soft patches, each this wide as a share of the frame's width, brightening and
 # dimming by up to this much, once round the loop each. Around the text it fades out over this share of the
 # side, so no edge of where it stops shows.
@@ -255,6 +258,35 @@ def glints(cover, keep):
         if len(found) == GLINTS:
             break
     return found
+
+
+def jewel_glints(cover, pieces, keep):
+    """Where jewelry (`pieces`, props.jewelry's outlines) catches the light: its brightest highlights, at most
+    JEWEL_GLINTS of them, JEWEL_APART of the side apart, none where `keep` (text, faces) is. Metal on a person
+    is rarely the lone bright speck on a dark ground that glints() looks for, so these are its own."""
+    if not pieces:
+        return []
+    side = cover.shape[0]
+    gray = cv2.cvtColor(np.clip(cover, 0, 255).astype(np.uint8), cv2.COLOR_RGB2GRAY).astype(np.float32)
+    lift = gray - cv2.blur(gray, (9, 9))
+    found = []
+    for piece in pieces:
+        inside = piece & (keep < 0.5)
+        if inside.sum() < GLINT_LEAST:
+            continue
+        # The piece's highlights: its brightest pixels that stand out from what is next to them.
+        score = np.where(inside, gray + 2 * lift, -1e9)
+        least = max(np.percentile(gray[inside], 97), JEWEL_BRIGHT)
+        for _ in range(JEWEL_GLINTS):
+            y, x = np.unravel_index(int(np.argmax(score)), score.shape)
+            if gray[y, x] < least:
+                break
+            if all(math.hypot(x - a, y - b) >= JEWEL_APART * side for a, b in found):
+                found.append((float(x), float(y)))
+            cv2.circle(score, (int(x), int(y)), int(JEWEL_APART * side), -1e9, -1)
+        if len(found) >= JEWEL_GLINTS:
+            break
+    return found[:JEWEL_GLINTS]
 
 
 def flare(size, reach):

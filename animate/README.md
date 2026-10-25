@@ -57,7 +57,7 @@ To leave labels on, add `--keep-labels` to the command in `start.bat`.
 ## Use
 
 1. Double-click `start.bat`. It starts ComfyUI and prints the address to enter on the phone, such as
-   `10.0.0.185:8790`. The first time, allow it through Windows Firewall on **Private** networks.
+   `192.168.1.20:8790`. The first time, allow it through Windows Firewall on **Private** networks.
 2. On the phone, with Full-screen artwork on, set **Computer** to that address, play a song from the
    album and tap **Animate this album's cover**. Allow local network access when iOS asks.
 3. A clip takes about 4 minutes on an RTX 4060, plus about 10 the first time while the models load.
