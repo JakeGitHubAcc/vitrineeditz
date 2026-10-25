@@ -124,7 +124,10 @@ static void recreditLabels(void) {
     }
 }
 
+static void artistLinesNow(void);
+
 static void creditPlaying(NSString *uri) {
+    artistLinesNow();
     NSString *album = SGLocalAlbumPlayingTitle();
     if (!album && sg_headerTitle) {
         // The header said the album's title; it goes back to Spotify's word below.
@@ -151,6 +154,67 @@ static void creditPlaying(NSString *uri) {
 
 void SGLocalFilesRecredit(void) {
     creditPlaying(SGURIString(SGPlayerState().track.URI));
+}
+
+#pragma mark - the artist line, tapped
+
+// A tap on the player's artist line opens a local file's artists and album (LocalLinks.m), as it opens a Spotify
+// track's artist. The recognizer goes on the first view from the line up that takes touches, the one Spotify's
+// own tap is on, and begins only while a local file plays, so a Spotify track's tap is left as it was.
+static NSString *sg_playingLocal;
+static char kArtistTapKey;
+
+@interface SGLocalArtistTap : NSObject <UIGestureRecognizerDelegate>
+@end
+
+@implementation SGLocalArtistTap
+- (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer *)recognizer {
+    return sg_playingLocal != nil;
+}
+
+// Spotify's own recognizers there wait for this one, which fails at once for a Spotify track.
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)recognizer shouldBeRequiredToFailByGestureRecognizer:(UIGestureRecognizer *)other {
+    return YES;
+}
+
+- (void)tapped:(UITapGestureRecognizer *)recognizer {
+    if (recognizer.state == UIGestureRecognizerStateEnded && sg_playingLocal) SGLocalFileShowLinks(sg_playingLocal, recognizer.view);
+}
+@end
+
+static void watchArtistTap(UIView *label) {
+    static SGLocalArtistTap *tap;
+    if (!tap) tap = [SGLocalArtistTap new];
+    UIView *line = label;
+    for (NSUInteger i = 0; line && i < 4 && ![line.accessibilityIdentifier isEqualToString:kPlayerArtist]; i++) line = line.superview;
+    if (![line.accessibilityIdentifier isEqualToString:kPlayerArtist]) return;
+    UIView *host = line;
+    while (host && !host.userInteractionEnabled) host = host.superview;
+    if (!host || objc_getAssociatedObject(host, &kArtistTapKey)) return;
+    UITapGestureRecognizer *recognizer = [[UITapGestureRecognizer alloc] initWithTarget:tap action:@selector(tapped:)];
+    recognizer.delegate = tap;
+    [host addGestureRecognizer:recognizer];
+    objc_setAssociatedObject(host, &kArtistTapKey, recognizer, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
+// What plays now, and the artist line of a player already on screen, which sets no label until the track changes.
+static void artistLinesNow(void) {
+    NSString *uri = SGURIString(SGPlayerState().track.URI);
+    sg_playingLocal = SGLocalFileIs(uri) ? uri : nil;
+    if (!sg_playingLocal) return;
+    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+        if (![scene isKindOfClass:UIWindowScene.class]) continue;
+        for (UIWindow *window in ((UIWindowScene *)scene).windows) {
+            SGForEachView(window, ^(UIView *view) {
+                if ([view.accessibilityIdentifier isEqualToString:kPlayerArtist]) watchArtistTap(view);
+            });
+        }
+    }
+}
+
+// Every label the player sets while a local file plays is looked at, a few views up, for the artist line.
+static void artistLineSet(UILabel *label) {
+    if (sg_playingLocal && NSThread.isMainThread && inPlayerArtist(label)) watchArtistTap(label);
 }
 
 #pragma mark - the system's now playing artwork
@@ -207,10 +271,12 @@ void SGLocalFilesRecredit(void) {
 
 %hook UILabel
 - (void)setText:(NSString *)text {
+    artistLineSet(self);
     %orig(credited(self, text) ?: text);
 }
 
 - (void)setAttributedText:(NSAttributedString *)text {
+    artistLineSet(self);
     NSString *swap = credited(self, text.string);
     if (!swap) {
         %orig;
