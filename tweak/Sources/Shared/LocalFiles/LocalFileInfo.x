@@ -303,7 +303,8 @@ static void hideQueueGlyph(UIView *line) {
         NSMutableArray<UIView *> *following = [NSMutableArray array];
         for (UIView *sub in level.superview.subviews) {
             if (sub == glyph || sub.alpha < 0.01 || leftOf(sub) < from + glyph.bounds.size.width - 1) continue;
-            if (sub != level && sub.bounds.size.height > kGlyphLargest) continue;
+            // On the line itself, not the title above it.
+            if (sub != level && (sub.bounds.size.height > kGlyphLargest || fabs(sub.center.y - level.center.y) > level.bounds.size.height / 2 + 4)) continue;
             [following addObject:sub];
             after = MIN(after, leftOf(sub));
         }
