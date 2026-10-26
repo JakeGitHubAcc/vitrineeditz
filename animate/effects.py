@@ -89,9 +89,9 @@ def letters(patch, color=None):
 
 
 def lettered(found, loose_box=False):
-    """Of what letters() found in a box, only what looks like letters: no long thin streak (the wall's grain), no
-    part that fills its own bounds nearly whole (a window set in the wall), and in a loose box (`loose_box`, the
-    finder's rather than a line the reader read) nothing touching the box's edge (an arm reaching in, To the Stars)."""
+    """Of what letters() found in a box, only what looks like letters: no long thin streak (the wall's grain), and in
+    a loose box (`loose_box`, the finder's rather than a line the reader read) no part that fills its own bounds
+    nearly whole (a window set in the wall) and nothing touching the box's edge (an arm reaching in, To the Stars)."""
     # Painted letters on a grained wall come apart along the grain: their pieces are joined first, so a letter is
     # judged whole and the specks between them stay small.
     found = cv2.morphologyEx(found.astype(np.uint8), cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (LETTER_JOIN, LETTER_JOIN)))
@@ -103,7 +103,9 @@ def lettered(found, loose_box=False):
     for k in range(1, count):
         x, y, bw, bh, area = stats[k]
         touches = (x == 0 or y == 0 or x + bw >= w or y + bh >= h) and loose_box
-        solid = area / max(bw * bh, 1) > LETTER_SOLID and bw * bh > LETTER_BLOCK * w * h
+        # Only in a loose box: a line the reader read is letters, and a heavy letter fills its bounds nearly whole
+        # too (Encore's E's, white blocks with two slits).
+        solid = loose_box and area / max(bw * bh, 1) > LETTER_SOLID and bw * bh > LETTER_BLOCK * w * h
         # A grain line or a streak is long and thin; a letter, even an I, is not this drawn out and this sparse.
         # A solid one this drawn out is a seam (where To the Stars' wall meets the water), not a letter either.
         drawn_out = max(bw, bh) / max(min(bw, bh), 1)
