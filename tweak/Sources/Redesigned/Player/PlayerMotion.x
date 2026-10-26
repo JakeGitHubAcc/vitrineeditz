@@ -523,13 +523,14 @@ static void setCoverShown(BOOL shown, BOOL animated) {
 
 void SGRPlayerMotionFieldLaidOut(void) {
     layOut();
-    setCoverShown(sg_motion == nil, NO);
+    setCoverShown(sg_motion == nil && !SGRPlayerMosaicClipShowing(), NO);
 }
 
 // A clip that came in before the player opened finds no cover to hide at the field's first pass, the covers
 // laying out after it (issue #19: the cover over the clip after a relaunch), so each cover's layout asks too.
 void SGRPlayerMotionCoverLaidOut(void) {
-    setCoverShown(sg_motion == nil, NO);
+    setCoverShown(sg_motion == nil && !SGRPlayerMosaicClipShowing(), NO);
+    SGRPlayerMosaicCoverMoved();
 }
 
 BOOL SGRPlayerMotionShowing(void) {
@@ -628,8 +629,48 @@ static void clear(BOOL animated) {
     else [old removeFromSuperview];
 }
 
+#pragma mark - Mosaic's animated cover
+
+// Mosaic plays the animated cover in the cover's square (PlayerVisualiser.m), as Spotify's cover makes way for it.
+static NSString *sg_mosaicShown;   // the track Mosaic's clip is of
+// Taller than this is a Canvas, which a square would cut to a strip of its middle: the cover stays for it.
+static const CGFloat kMosaicTallest = 1.4;
+
+static void clearMosaic(BOOL animated) {
+    if (!sg_mosaicShown) return;
+    sg_mosaicShown = nil;
+    SGRPlayerMosaicSetClip(nil, nil);
+    if (!sg_motion) setCoverShown(YES, animated);
+}
+
+static void showMosaic(NSString *track, NSURL *file) {
+    NSUInteger begun = sg_begun;
+    SGMotionPoster(file, ^(UIImage *poster) {
+        if (!poster || poster.size.width <= 0 || begun != sg_begun || SGRPlayerBackground() != SGRPlayerBackgroundMosaic) return;
+        if (poster.size.height / poster.size.width > kMosaicTallest) {
+            SGLog(@"redesign player: mosaic keeps the cover, %@ is a Canvas", file.lastPathComponent);
+            clearMosaic(YES);
+            return;
+        }
+        sg_mosaicShown = track;
+        SGRPlayerMosaicSetClip(file, poster);
+        setCoverShown(!SGRPlayerMosaicClipShowing(), YES);
+        SGLog(@"redesign player: mosaic plays animated cover %@", file.lastPathComponent);
+    });
+}
+
+void SGRPlayerMotionRestart(void) {
+    if (SGRPlayerBackground() != SGRPlayerBackgroundAnimated) clear(YES);
+    clearMosaic(YES);
+    [sg_follower restart];
+}
+
 static void show(NSString *track, NSURL *file) {
     if (!file || ![track isEqualToString:sg_track]) return;
+    if (SGRPlayerBackground() == SGRPlayerBackgroundMosaic) {
+        showMosaic(track, file);
+        return;
+    }
     NSUInteger begun = sg_begun;
     SGMotionPoster(file, ^(UIImage *poster) {
         // A walk begun while the poster was read (switched off, Spotify's video) has the say.
@@ -684,6 +725,14 @@ static void videoSurface(id unit, BOOL attached) {
 static BOOL beginTrack(NSString *track) {
     sg_track = track;
     sg_begun++;
+    // Mosaic's clip in the square: the same track walked again keeps it until a new one comes.
+    if (SGRPlayerBackground() == SGRPlayerBackgroundMosaic) {
+        if (sg_motion) clear(YES);
+        BOOL allowed = !videoShowing() && motionAllowed();
+        if (!allowed || ![track isEqualToString:sg_mosaicShown]) clearMosaic(YES);
+        return allowed;
+    }
+    clearMosaic(YES);
     // Read on every track, since the ⋯ menu switches it.
     BOOL wanted = SGRPlayerBackground() == SGRPlayerBackgroundAnimated && !videoShowing() && motionAllowed();
     if (wanted && [track isEqualToString:sg_shown]) return YES;
@@ -778,7 +827,10 @@ void SGPlayerMenuSetAnimatedArtwork(BOOL on) {
         return beginTrack(uri);
     } found:^(NSString *uri, NSURL *file) {
         if (file) show(uri, file);
-        else clear(YES);
+        else {
+            clear(YES);
+            clearMosaic(YES);
+        }
     }];
     %init(SGRVideoSurfaces);
 }

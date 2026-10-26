@@ -218,6 +218,7 @@ static NSArray<UIMenuElement *> *playerItems(void) {
             @[@(SGRPlayerBackgroundFluid), @"Show Fluid Artwork", @"drop"],
             @[@(SGRPlayerBackgroundAnimated), @"Show Animated Artwork", @"play.rectangle.on.rectangle"],
             @[@(SGRPlayerBackgroundVisualiser), @"Show Visualizer", @"waveform"],
+            @[@(SGRPlayerBackgroundMosaic), @"Show Mosaic", @"circle.grid.3x3.fill"],
         ];
         SGRPlayerBackgroundKind current = SGRPlayerBackground();
         for (NSArray *background in backgrounds) {

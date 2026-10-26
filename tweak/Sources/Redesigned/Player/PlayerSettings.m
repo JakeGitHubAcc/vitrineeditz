@@ -45,6 +45,7 @@ static NSArray<NSString *> *backgroundNotes(void) {
         @"The cover itself, blurred and slowly turning. It rests while a song is paused.",
         @"The song's Canvas or the album's moving cover, else Fluid. The player's ⋯ menu switches between this, Fluid and Visualizer.",
         @"The song's sound as gentle hills in the cover's colors, over Fluid held still. They settle while a song is paused.",
+        @"A wall of lights in the cover's colors, lit in bars out of the cover by the song, the album's animated cover in the middle where it has one.",
     ];
 }
 
@@ -197,7 +198,7 @@ static NSArray<NSString *> *backgroundNotes(void) {
         self->_motion = kind == SGRPlayerBackgroundAnimated ? SGRPlayerMotionPreview(arrived) : nil;
         if (self->_motion) [self insertSubview:self->_motion aboveSubview:self->_field];
         [self->_visualiser removeFromSuperview];
-        self->_visualiser = kind == SGRPlayerBackgroundVisualiser ? SGRPlayerVisualiserPreview() : nil;
+        self->_visualiser = kind == SGRPlayerBackgroundVisualiser || kind == SGRPlayerBackgroundMosaic ? SGRPlayerVisualiserPreview() : nil;
         if (self->_visualiser) [self insertSubview:self->_visualiser aboveSubview:self->_field];
         self->_field.motionHeld = SGPlayerState().isPaused || self->_motion != nil || self->_visualiser != nil;
     };
@@ -340,7 +341,7 @@ UIViewController *SGRPlayerSettingsPage(NSArray *more) {
     backgrounds.apportionsSegmentWidthsByContent = YES;
 
     SGModRow *lowData = SGOptionRow(@"Download in Low Data Mode", @"Up to about 7 MB a song", SGKeyMotionLowData);
-    lowData.visible = ^BOOL { return SGRPlayerBackground() == SGRPlayerBackgroundAnimated; };
+    lowData.visible = ^BOOL { SGRPlayerBackgroundKind kind = SGRPlayerBackground(); return kind == SGRPlayerBackgroundAnimated || kind == SGRPlayerBackgroundMosaic; };
     SGModRow *sources = SGMotionSourcesRow();
     sources.visible = lowData.visible;
 
@@ -356,8 +357,21 @@ UIViewController *SGRPlayerSettingsPage(NSArray *more) {
     ];
     for (SGModRow *row in fluid) row.visible = ^BOOL { return SGRPlayerBackground() == SGRPlayerBackgroundFluid; };
 
+    NSArray<SGModRow *> *mosaic = @[
+        SGSliderRow(@"Dots across", nil, SGRMosaicDotsLeast, SGRMosaicDotsMost, 1, ^double { return SGRMosaicDots(); },
+                    ^(double value) { SGSetInt(SGRKeyMosaicDots, lround(value)); },
+                    ^NSString *(double value) { return [NSString stringWithFormat:@"%.0f", value]; }),
+        SGSliderRow(@"Dot size", nil, SGRMosaicSizeLeast, SGRMosaicSizeMost, 1, ^double { return SGRMosaicSize(); },
+                    ^(double value) { SGSetInt(SGRKeyMosaicSize, lround(value)); },
+                    ^NSString *(double value) { return [NSString stringWithFormat:@"%.0f%%", value]; }),
+        SGSwitchRow(@"Shadow under text", nil, SGRKeyMosaicTextShadow),
+    ];
+    for (SGModRow *row in mosaic) row.visible = ^BOOL { return SGRPlayerBackground() == SGRPlayerBackgroundMosaic; };
+
     NSMutableArray<SGModSection *> *sections = [NSMutableArray arrayWithObjects:
         SGSection(nil, @[sources, lowData]),
+        SGNotedSection(nil, mosaic, @"More dots across makes them smaller and finer; Dot size is how much of its space each light fills. "
+                                    @"Shadow under text keeps the title, the times and the buttons readable over bright lights."),
         SGNotedSection(nil, fluid, @"Brightness above 100% can make white text harder to read. A paused song holds the "
                                    @"background still. Animated and Visualizer use these where they show Fluid."),
         SGNotedSection(@"Controls", @[SGSwitchRow(@"Volume", nil, SGRKeyPlayerVolume),
@@ -369,7 +383,7 @@ UIViewController *SGRPlayerSettingsPage(NSArray *more) {
     [sections addObjectsFromArray:more];
     // Fluid, Animated and Visualizer share the field (PlayerMotion.x reads the choice on every track, PlayerVisualiser.m
     // on the field's layout); Still and Colors are a field of another kind, made once a launch (PlayerField.x).
-    NSString *footer = @"Fluid, Animated and Visualizer change with the next song. Still, Colors and Hide on the player apply after you restart Spotify.";
+    NSString *footer = @"Fluid, Animated, Visualizer and Mosaic change with the next song. Still, Colors and Hide on the player apply after you restart Spotify.";
     SGRPlayerPage *page = [[SGRPlayerPage alloc] initWithTitle:@"Player" intro:nil sections:sections footer:footer];
     weakPage = page;
     page.showcase = showcase;
