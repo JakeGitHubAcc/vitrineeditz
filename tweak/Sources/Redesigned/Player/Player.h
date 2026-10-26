@@ -188,18 +188,6 @@ void SGRPlayerMosaicCoverMoved(void);
 // The playing track's animated cover looked up again, for the background's change (PlayerMotion.x).
 void SGRPlayerMotionRestart(void);
 
-// Share as Instagram Note (PlayerNote.m), from the ⋯ menu: a sheet that writes the playing song up as a note, copies
-// it and opens Instagram. Its choices are kept for the next song.
-void SGRPlayerShowNoteComposer(void);
-#define SGRKeyNoteTemplate @"spotifyglass.redesign.player.note.template"
-#define SGRKeyNoteLetters @"spotifyglass.redesign.player.note.letters"
-#define SGRKeyNoteLettersOn @"spotifyglass.redesign.player.note.lettersOn"
-#define SGRKeyNoteCase @"spotifyglass.redesign.player.note.case"
-#define SGRKeyNoteEmoji @"spotifyglass.redesign.player.note.emoji"
-#define SGRKeyNoteMatchCover @"spotifyglass.redesign.player.note.matchCover"
-#define SGRKeyNoteShape @"spotifyglass.redesign.player.note.shape"
-#define SGRKeyNoteColorsAt @"spotifyglass.redesign.player.note.colorsAt"
-
 // The background is the Visualizer.
 BOOL SGRPlayerVisualiserShowing(void);
 // Puts the hills on the field or takes them off as the background says, lays them out, and blurs them while the
