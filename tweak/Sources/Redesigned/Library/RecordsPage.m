@@ -1221,7 +1221,7 @@ static BOOL matches(SGRRecord *record, NSString *query) {
 // artist in the cover's colors, white on dark gray until the cover is in.
 - (UIImage *)labelFor:(SGRRecord *)record {
     NSArray<UIColor *> *colors = [self colorsOf:record];
-    UIColor *back = colors.firstObject, *ink = colors.lastObject;
+    UIColor *back = colors.firstObject, *ink = colors[1];
     UIImage *scan = [self sleeveOf:record].spine;
     CGSize size = CGSizeMake(_width, kSpine);
     UIGraphicsImageRendererFormat *format = [UIGraphicsImageRendererFormat preferredFormat];
@@ -1267,7 +1267,7 @@ static BOOL matches(SGRRecord *record, NSString *query) {
     if (!tracks) [self askTracksOf:record];
     tracks = _tracks[key];
     NSArray<UIColor *> *colors = [self colorsOf:record];
-    UIColor *paper = colors.firstObject, *ink = colors.lastObject;
+    UIColor *paper = colors.firstObject, *ink = colors[1];
     CGSize size = CGSizeMake(_width, _width);
     UIGraphicsImageRendererFormat *format = [UIGraphicsImageRendererFormat preferredFormat];
     format.opaque = YES;
