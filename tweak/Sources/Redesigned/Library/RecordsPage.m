@@ -12,7 +12,9 @@
 // opens its album, pushed onto the tab's stack over the crate (the record still out on the way back); a tap anywhere
 // else puts it back.
 //
-// With Vinyl Scans on (the menu), a record wears its sleeve as a vinyl pressing of it was scanned, front, back,
+// A local album wears the pictures that came with its songs when it was imported from a link (DriveImport.h): its
+// front, back, spine, sticker and inside, as a scanned sleeve is worn. Else, with Vinyl Scans on (the menu), a record
+// wears its sleeve as a vinyl pressing of it was scanned, front, back,
 // spine, hype sticker and gatefold, when the Cover Art Archive has them (RecordScans.h); a sticker scanned on its own
 // goes on the front's top right corner, where one usually is. A record with no scanned back has one drawn, its
 // tracks listed in the cover's colors, and a label strip with no spine scan is drawn in them too: the cover's most
@@ -28,6 +30,7 @@
 #import "Redesigned/Navbar/Navbar.h"
 #import "Settings/SGPage.h"
 #import "Settings/SGPageStyle.h"
+#import "Shared/LocalFiles/DriveImport.h"
 #import "Shared/LocalFiles/LocalAlbums.h"
 #import "Shared/Navigation/AddTabSheet.h"
 #import "Shared/Navigation/Links.h"
@@ -232,6 +235,8 @@ static UIImage *withSticker(UIImage *front, UIImage *sticker) {
     NSMutableDictionary<NSString *, NSArray<UIColor *> *> *_colors;
     NSMutableDictionary<NSString *, NSArray<NSString *> *> *_tracks;
     NSMutableSet<NSString *> *_asked, *_sleevesAsked, *_tracksAsked;
+    // The records wearing their own pictures from an import, whatever Vinyl Scans is.
+    NSMutableSet<NSString *> *_ownSleeves;
     UIImageView *_backdrop;
     UIView *_stage;
     CALayer *_dim;
@@ -265,6 +270,7 @@ static UIImage *withSticker(UIImage *front, UIImage *sticker) {
     _asked = [NSMutableSet set];
     _sleevesAsked = [NSMutableSet set];
     _tracksAsked = [NSMutableSet set];
+    _ownSleeves = [NSMutableSet set];
     _focused = _pulled = _returning = -1;
     return self;
 }
@@ -550,7 +556,8 @@ static UIImage *withSticker(UIImage *front, UIImage *sticker) {
 }
 
 - (SGRSleeve *)sleeveOf:(SGRRecord *)record {
-    return [self scans] ? _sleeves[[record key]] : nil;
+    NSString *key = [record key];
+    return [self scans] || [_ownSleeves containsObject:key] ? _sleeves[key] : nil;
 }
 
 - (NSArray<UIColor *> *)colorsOf:(SGRRecord *)record {
@@ -595,7 +602,7 @@ static UIImage *withSticker(UIImage *front, UIImage *sticker) {
 // What the record's cover shows: the sleeve's scanned front, its sticker on, when there is one, else the album's cover.
 - (UIImage *)faceOf:(SGRRecord *)record {
     NSString *key = [record key];
-    return ([self scans] ? [_fronts objectForKey:key] : nil) ?: [_pictures objectForKey:key];
+    return ([self scans] || [_ownSleeves containsObject:key] ? [_fronts objectForKey:key] : nil) ?: [_pictures objectForKey:key];
 }
 
 // The sleeve's back: its scan, else drawn in the cover's colors with the album's name and its tracks.
@@ -689,6 +696,7 @@ static UIImage *withSticker(UIImage *front, UIImage *sticker) {
 
 - (void)redrawSleeves {
     [_backs removeAllObjects];
+    [_sleevesAsked removeAllObjects];
     [CATransaction begin];
     [CATransaction setDisableActions:YES];
     for (NSUInteger i = 0; i < _layers.count; i++) {
@@ -753,7 +761,7 @@ static UIImage *withSticker(UIImage *front, UIImage *sticker) {
     if (!cover || [_sleevesAsked containsObject:key]) return;
     [_sleevesAsked addObject:key];
     __weak SGRRecordsPage *weakSelf = self;
-    SGRRecordSleeve(record.title, record.artist, record.kind, cover, ^(SGRSleeve *sleeve) {
+    void (^wear)(SGRSleeve *, BOOL) = ^(SGRSleeve *sleeve, BOOL own) {
         if (!weakSelf || !sleeve.front) return;
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
             UIImage *front = withSticker(sleeve.front, sleeve.sticker);
@@ -761,11 +769,32 @@ static UIImage *withSticker(UIImage *front, UIImage *sticker) {
                 SGRRecordsPage *page = weakSelf;
                 if (!page) return;
                 page->_sleeves[key] = sleeve;
+                if (own) [page->_ownSleeves addObject:key];
                 [page->_fronts setObject:front forKey:key];
                 [page redrawRecordWithKey:key];
             });
         });
-    });
+    };
+    // A local album's own pictures, from its import, before any scan.
+    void (^scanned)(void) = ^{
+        SGRRecordsPage *page = weakSelf;
+        if (!page) return;
+        // Asked again when Vinyl Scans is switched on (-redrawSleeves).
+        if (![page scans]) return;
+        SGRRecordSleeve(record.title, record.artist, record.kind, cover, ^(SGRSleeve *sleeve) { wear(sleeve, NO); });
+    };
+    NSDictionary<NSString *, NSArray<NSString *> *> *artwork = record.local ? SGLocalAlbumArtwork(record.title, record.artist) : nil;
+    if (artwork) {
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+            SGRSleeve *sleeve = SGRSleeveOfArtwork(artwork, cover);
+            dispatch_async(dispatch_get_main_queue(), ^{
+                if (sleeve) wear(sleeve, YES);
+                else scanned();
+            });
+        });
+        return;
+    }
+    scanned();
 }
 
 - (void)showBackdrop:(UIImage *)picture {
@@ -830,7 +859,7 @@ static UIImage *withSticker(UIImage *front, UIImage *sticker) {
         UIImage *picture = [self faceOf:item];
         if (picture) face.contents = (id)picture.CGImage;
         if (![_pictures objectForKey:[item key]]) [self askPictureOf:i];
-        else if (scans && fabs((CGFloat)i - focus) <= kScanReach) [self askSleeveOf:i];
+        else if ((scans || item.local) && fabs((CGFloat)i - focus) <= kScanReach) [self askSleeveOf:i];
         if (!spine.contents) spine.contents = (id)[self labelFor:item].CGImage;
     }
     [CATransaction commit];

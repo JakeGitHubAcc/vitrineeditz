@@ -4,6 +4,7 @@
 #import "Core/SGCore.h"
 #import "DriveImport.h"
 #import "LocalAlbums.h"
+#import "MegaLinks.h"
 
 NSNotificationName const SGDriveJobDidChangeNotification = @"spotifyglass.driveImport.jobDidChange";
 
@@ -32,6 +33,113 @@ static BOOL isCoverName(NSString *name) {
     return [@[@"jpg", @"jpeg", @"png"] containsObject:extension] && [@[@"cover", @"folder", @"front", @"album", @"artwork"] containsObject:base];
 }
 
+static BOOL isImageName(NSString *name) {
+    return [@[@"jpg", @"jpeg", @"png", @"webp", @"heic"] containsObject:name.pathExtension.lowercaseString];
+}
+
+// What a picture that came with the songs shows, by its name: SGLocalArtworkFront, Back (a CD's inlay, its tray card,
+// is its back), Spine, Sticker, Inside (a gatefold's or a booklet's), Disc; nil for a picture its name does not tell.
+static NSString *artworkKind(NSString *name) {
+    NSString *base = name.lastPathComponent.stringByDeletingPathExtension.lowercaseString;
+    NSArray<NSString *> *words = [base componentsSeparatedByCharactersInSet:NSCharacterSet.alphanumericCharacterSet.invertedSet];
+    BOOL (^has)(NSArray<NSString *> *) = ^BOOL(NSArray<NSString *> *starts) {
+        for (NSString *word in words) {
+            for (NSString *start in starts) if (word.length && [word hasPrefix:start]) return YES;
+        }
+        return NO;
+    };
+    if (has(@[@"spine"])) return SGLocalArtworkSpine;
+    if (has(@[@"sticker", @"hype"])) return SGLocalArtworkSticker;
+    if (has(@[@"inside", @"inner", @"gatefold", @"interior", @"booklet", @"insert", @"liner"])) return SGLocalArtworkInside;
+    if (has(@[@"back", @"rear", @"tray", @"inlay", @"reverse"])) return SGLocalArtworkBack;
+    if (has(@[@"cd", @"disc", @"disk", @"vinyl", @"label", @"lp", @"record", @"medium"])) return SGLocalArtworkDisc;
+    if (isCoverName(name) || has(@[@"cover", @"front", @"folder", @"artwork"])) return SGLocalArtworkFront;
+    return nil;
+}
+
+NSString *const SGLocalArtworkFront = @"front";
+NSString *const SGLocalArtworkBack = @"back";
+NSString *const SGLocalArtworkSpine = @"spine";
+NSString *const SGLocalArtworkSticker = @"sticker";
+NSString *const SGLocalArtworkInside = @"inside";
+NSString *const SGLocalArtworkDisc = @"disc";
+
+#pragma mark - artwork kept
+
+static NSString *artworkFolder(void) {
+    NSString *support = NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, YES).firstObject;
+    NSString *path = [support stringByAppendingPathComponent:@"VitrineArtwork"];
+    [NSFileManager.defaultManager createDirectoryAtPath:path withIntermediateDirectories:YES attributes:nil error:nil];
+    return path;
+}
+
+static NSString *artworkIndexPath(void) {
+    return [artworkFolder() stringByAppendingPathComponent:@"albums.plist"];
+}
+
+static NSString *albumKey(NSString *album, NSString *artist) {
+    return [NSString stringWithFormat:@"%@\t%@", artist.lowercaseString ?: @"", album.lowercaseString ?: @""];
+}
+
+// The albums' artwork, by album key: {folder, album, artist, files: {kind: [names]}}. Main thread.
+static NSMutableDictionary<NSString *, NSDictionary *> *artworkIndex(void) {
+    static NSMutableDictionary *index;
+    if (!index) {
+        NSDictionary *saved = [NSDictionary dictionaryWithContentsOfFile:artworkIndexPath()];
+        index = [saved isKindOfClass:NSDictionary.class] ? [saved mutableCopy] : [NSMutableDictionary dictionary];
+    }
+    return index;
+}
+
+NSDictionary<NSString *, NSArray<NSString *> *> *SGLocalAlbumArtwork(NSString *album, NSString *artist) {
+    if (!album.length) return nil;
+    NSDictionary *entry = artworkIndex()[albumKey(album, artist)];
+    // An album shown under another artist (Various Artists, or names edited since) by its title alone, when only one has it.
+    if (!entry) {
+        for (NSDictionary *other in artworkIndex().allValues) {
+            if (![other[@"album"] isKindOfClass:NSString.class] || [other[@"album"] caseInsensitiveCompare:album] != NSOrderedSame) continue;
+            if (entry) return nil;
+            entry = other;
+        }
+    }
+    if (!entry) return nil;
+    NSString *folder = [artworkFolder() stringByAppendingPathComponent:entry[@"folder"]];
+    NSMutableDictionary<NSString *, NSArray<NSString *> *> *files = [NSMutableDictionary dictionary];
+    NSDictionary *kinds = [entry[@"files"] isKindOfClass:NSDictionary.class] ? entry[@"files"] : @{};
+    for (NSString *kind in kinds) {
+        NSMutableArray<NSString *> *paths = [NSMutableArray array];
+        for (NSString *name in kinds[kind]) {
+            NSString *path = [folder stringByAppendingPathComponent:name];
+            if ([NSFileManager.defaultManager fileExistsAtPath:path]) [paths addObject:path];
+        }
+        if (paths.count) files[kind] = paths;
+    }
+    return files.count ? files : nil;
+}
+
+// Keeps the pictures at `paths` (by kind, each list in order) as `album`'s, in place of any it had. Main thread.
+static void keepAlbumArtwork(NSString *album, NSString *artist, NSDictionary<NSString *, NSArray<NSString *> *> *paths) {
+    NSString *key = albumKey(album, artist);
+    NSDictionary *old = artworkIndex()[key];
+    if ([old[@"folder"] isKindOfClass:NSString.class])
+        [NSFileManager.defaultManager removeItemAtPath:[artworkFolder() stringByAppendingPathComponent:old[@"folder"]] error:nil];
+    NSString *name = NSUUID.UUID.UUIDString;
+    NSString *folder = [artworkFolder() stringByAppendingPathComponent:name];
+    [NSFileManager.defaultManager createDirectoryAtPath:folder withIntermediateDirectories:YES attributes:nil error:nil];
+    NSMutableDictionary<NSString *, NSArray<NSString *> *> *files = [NSMutableDictionary dictionary];
+    for (NSString *kind in paths) {
+        NSMutableArray<NSString *> *names = [NSMutableArray array];
+        for (NSString *path in paths[kind]) {
+            NSString *kept = [NSString stringWithFormat:@"%@-%lu.%@", kind, (unsigned long)names.count + 1, path.pathExtension.lowercaseString];
+            if ([NSFileManager.defaultManager moveItemAtPath:path toPath:[folder stringByAppendingPathComponent:kept] error:nil]) [names addObject:kept];
+        }
+        if (names.count) files[kind] = names;
+    }
+    artworkIndex()[key] = @{@"folder": name, @"album": album, @"artist": artist ?: @"", @"files": files};
+    [artworkIndex() writeToFile:artworkIndexPath() atomically:YES];
+    SGLog(@"link import: kept %lu kinds of artwork for an album", (unsigned long)files.count);
+}
+
 NSString *SGDriveImportFolder(void) {
     // Documents itself: Spotify reads local files from it, and may not look into folders inside it.
     return NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
@@ -45,6 +153,9 @@ NSString *SGDriveImportFolder(void) {
 @property (nonatomic, readwrite) double progress;
 // Drive's id, or for a file out of a .zip where it was unpacked.
 @property (nonatomic, copy) NSString *fileID, *unpacked;
+// A file on Mega, or one a link leads straight to.
+@property (nonatomic, strong) SGMegaFile *megaFile;
+@property (nonatomic, copy) NSURL *address;
 @end
 @implementation SGDriveItem
 @end
@@ -436,6 +547,9 @@ static NSString *sizeText(NSString *path) {
     NSData *_folderCover;
     BOOL _cancelled;
     NSUInteger _saved;
+    // The pictures that came with the songs, by kind, and the albums and artists of the songs saved.
+    NSMutableDictionary<NSString *, NSMutableArray<NSString *> *> *_artwork;
+    NSCountedSet<NSString *> *_albums, *_artists;
 }
 
 - (void)changed {
@@ -458,6 +572,7 @@ static NSString *sizeText(NSString *path) {
     self.finished = YES;
     [_session finishTasksAndInvalidate];
     _session = nil;
+    [self keepArtwork];
     if (_scratch) [NSFileManager.defaultManager removeItemAtPath:_scratch error:nil];
     SGLog(@"drive import: %lu songs saved from %lu files%@", (unsigned long)_saved, (unsigned long)self.items.count,
           self.error ? [@", " stringByAppendingString:self.error] : @"");
@@ -465,11 +580,82 @@ static NSString *sizeText(NSString *path) {
     if (_saved) SGLocalAlbumsRefresh(nil);
 }
 
-- (void)startWithID:(NSString *)fileID folder:(BOOL)folder {
+// The pictures that came with the songs kept as their album's, the album most of the songs saved are on: the Records
+// page wears them (SGLocalAlbumArtwork).
+- (void)keepArtwork {
+    if (!_artwork.count) return;
+    NSString *album = nil, *artist = nil;
+    for (NSString *name in _albums) if (!album || [_albums countForObject:name] > [_albums countForObject:album]) album = name;
+    for (NSString *name in _artists) if (!artist || [_artists countForObject:name] > [_artists countForObject:artist]) artist = name;
+    if (album.length) keepAlbumArtwork(album, _artists.count > 1 && [_artists countForObject:artist] * 2 < _saved ? @"Various Artists" : artist, _artwork);
+    _artwork = nil;
+}
+
+// What a song saved is on, read off the saved file.
+- (void)noteAlbumOf:(NSString *)path {
+    SGSongTags *tags = [SGSongTags new];
+    readCommon([AVURLAsset URLAssetWithURL:[NSURL fileURLWithPath:path] options:nil], tags);
+    NSString *album = tags.album, *artist = tags.albumArtist ?: tags.artist;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (album.length) [self->_albums addObject:album];
+        if (artist.length) [self->_artists addObject:artist];
+    });
+}
+
+- (void)prepare {
     _scratch = [NSTemporaryDirectory() stringByAppendingPathComponent:[@"drive-" stringByAppendingString:NSUUID.UUID.UUIDString]];
     [NSFileManager.defaultManager createDirectoryAtPath:_scratch withIntermediateDirectories:YES attributes:nil error:nil];
     _session = [NSURLSession sessionWithConfiguration:NSURLSessionConfiguration.defaultSessionConfiguration delegate:self
                                         delegateQueue:NSOperationQueue.mainQueue];
+    _artwork = [NSMutableDictionary dictionary];
+    _albums = [NSCountedSet set];
+    _artists = [NSCountedSet set];
+}
+
+// Pictures first, the front first of all, so a song without a cover of its own gets the folder's.
+static void picturesFirst(NSMutableArray<SGDriveItem *> *items) {
+    [items sortWithOptions:NSSortStable usingComparator:^NSComparisonResult(SGDriveItem *a, SGDriveItem *b) {
+        NSInteger ra = [artworkKind(a.name) isEqualToString:SGLocalArtworkFront] ? 0 : isImageName(a.name) ? 1 : 2;
+        NSInteger rb = [artworkKind(b.name) isEqualToString:SGLocalArtworkFront] ? 0 : isImageName(b.name) ? 1 : 2;
+        return ra == rb ? NSOrderedSame : ra < rb ? NSOrderedAscending : NSOrderedDescending;
+    }];
+}
+
+- (void)startMega:(NSString *)link {
+    [self prepare];
+    __weak SGDriveJob *weakSelf = self;
+    SGMegaList(link, ^(NSArray<SGMegaFile *> *files, NSString *error) {
+        SGDriveJob *job = weakSelf;
+        if (!job || job.finished) return;
+        if (!files) { [job fail:error ?: @"The link could not be read."]; return; }
+        if (!files.count) { [job fail:error ?: @"The folder is empty."]; return; }
+        NSMutableArray<SGDriveItem *> *items = [NSMutableArray array];
+        for (SGMegaFile *file in files) {
+            SGDriveItem *item = [SGDriveItem new];
+            item.name = file.name;
+            item.megaFile = file;
+            [items addObject:item];
+        }
+        picturesFirst(items);
+        job.items = items;
+        [job changed];
+        [job next];
+    });
+}
+
+// A link straight to a file: its name is known once it answers.
+- (void)startDirect:(NSURL *)address {
+    [self prepare];
+    SGDriveItem *item = [SGDriveItem new];
+    item.name = @"Linked file";
+    item.address = address;
+    self.items = @[item];
+    [self changed];
+    [self next];
+}
+
+- (void)startWithID:(NSString *)fileID folder:(BOOL)folder {
+    [self prepare];
     if (!folder) {
         SGDriveItem *item = [SGDriveItem new];
         item.name = @"Shared file";
@@ -492,11 +678,7 @@ static NSString *sizeText(NSString *path) {
             item.fileID = file[1];
             [items addObject:item];
         }
-        // A cover image first, for the songs whose files have none.
-        [items sortWithOptions:NSSortStable usingComparator:^NSComparisonResult(SGDriveItem *a, SGDriveItem *b) {
-            BOOL ca = isCoverName(a.name), cb = isCoverName(b.name);
-            return ca == cb ? NSOrderedSame : ca ? NSOrderedAscending : NSOrderedDescending;
-        }];
+        picturesFirst(items);
         job.items = items;
         [job changed];
         [job next];
@@ -522,9 +704,9 @@ static NSString *sizeText(NSString *path) {
     SGDriveItem *item = [self nextWaiting];
     if (!item) { [self finish]; return; }
     NSString *extension = item.name.pathExtension.lowercaseString;
-    BOOL known = [lossless() containsObject:extension] || [lossy() containsObject:extension] || [extension isEqualToString:@"zip"] || isCoverName(item.name);
-    // A folder's other files (a .cue, a .log, booklet scans) are left on Drive; a single shared file's
-    // name is not known until it downloads.
+    BOOL known = [lossless() containsObject:extension] || [lossy() containsObject:extension] || [extension isEqualToString:@"zip"] || isImageName(item.name);
+    // A folder's other files (a .cue, a .log) are left where they are; a single shared file's name is not known
+    // until it downloads.
     if (item.name.pathExtension.length && !known && !item.unpacked) {
         item.state = SGDriveItemSkipped;
         item.detail = @"Not a song";
@@ -536,8 +718,27 @@ static NSString *sizeText(NSString *path) {
     item.state = SGDriveItemDownloading;
     item.progress = 0;
     [self changed];
-    NSString *address = [NSString stringWithFormat:@"https://drive.usercontent.google.com/download?id=%@&export=download&confirm=t", item.fileID];
-    _task = [_session downloadTaskWithURL:[NSURL URLWithString:address]];
+    if (item.megaFile) {
+        // Mega's address for it is asked for now, as it does not last.
+        __weak SGDriveJob *weakSelf = self;
+        SGMegaAddress(item.megaFile, ^(NSURL *address, NSString *error) {
+            SGDriveJob *job = weakSelf;
+            if (!job || job.finished) return;
+            if (!address || job->_cancelled) {
+                item.state = job->_cancelled ? SGDriveItemSkipped : SGDriveItemFailed;
+                item.detail = job->_cancelled ? @"Stopped" : error;
+                [job changed];
+                job->_next++;
+                [job next];
+                return;
+            }
+            job->_task = [job->_session downloadTaskWithURL:address];
+            [job->_task resume];
+        });
+        return;
+    }
+    NSURL *address = item.address ?: [NSURL URLWithString:[NSString stringWithFormat:@"https://drive.usercontent.google.com/download?id=%@&export=download&confirm=t", item.fileID]];
+    _task = [_session downloadTaskWithURL:address];
     [_task resume];
 }
 
@@ -562,7 +763,10 @@ static NSString *sizeText(NSString *path) {
     NSString *type = response.MIMEType ?: @"";
     if (response.statusCode != 200 || [type hasPrefix:@"text/html"]) {
         item.state = SGDriveItemFailed;
-        item.detail = response.statusCode == 404 ? @"Not found" : @"Drive did not send the file. Check its sharing, or try again later.";
+        item.detail = response.statusCode == 404 ? @"Not found"
+                    : item.address ? @"The link opens a web page, not a file. Use the link the site's Download button gives."
+                    : item.megaFile ? @"Mega did not send the file. Try again later."
+                    : @"Drive did not send the file. Check its sharing, or try again later.";
         return;
     }
     // A single shared file's own name, from the answer.
@@ -580,6 +784,35 @@ static NSString *sizeText(NSString *path) {
     SGDriveItem *item = [self downloading];
     _task = nil;
     if (!item || self.finished) return;
+    if (item.unpacked && !error && item.megaFile) {
+        // Mega's files come encrypted with their own key.
+        item.state = SGDriveItemConverting;
+        item.detail = @"Decrypting";
+        [self changed];
+        NSString *encrypted = item.unpacked, *plain = [_scratch stringByAppendingPathComponent:[NSUUID.UUID.UUIDString stringByAppendingPathExtension:item.name.pathExtension]];
+        SGMegaFile *file = item.megaFile;
+        __weak SGDriveJob *weakSelf = self;
+        dispatch_async(workQueue(), ^{
+            BOOL fine = SGMegaDecrypt(file, encrypted, plain);
+            [NSFileManager.defaultManager removeItemAtPath:encrypted error:nil];
+            dispatch_async(dispatch_get_main_queue(), ^{
+                SGDriveJob *job = weakSelf;
+                if (!job || job.finished) return;
+                item.megaFile = nil;
+                if (fine) {
+                    item.unpacked = plain;
+                    [job process:item at:plain];
+                    return;
+                }
+                item.state = SGDriveItemFailed;
+                item.detail = @"The file could not be decrypted.";
+                [job changed];
+                job->_next++;
+                [job next];
+            });
+        });
+        return;
+    }
     if (item.unpacked && !error) { [self process:item at:item.unpacked]; return; }
     if (item.state == SGDriveItemDownloading) {
         item.state = _cancelled ? SGDriveItemSkipped : SGDriveItemFailed;
@@ -601,10 +834,20 @@ static NSString *sizeText(NSString *path) {
         job->_next++;
         [job next];
     };
-    if (isCoverName(item.name)) {
-        _folderCover = [NSData dataWithContentsOfFile:path];
+    if (isImageName(item.name)) {
+        NSString *kind = artworkKind(item.name);
+        NSDictionary<NSString *, NSString *> *what = @{SGLocalArtworkFront: @"front cover", SGLocalArtworkBack: @"back", SGLocalArtworkSpine: @"spine",
+                                                       SGLocalArtworkSticker: @"hype sticker", SGLocalArtworkInside: @"inside", SGLocalArtworkDisc: @"disc"};
+        if ([kind isEqualToString:SGLocalArtworkFront] && !_folderCover) _folderCover = [NSData dataWithContentsOfFile:path];
         item.state = SGDriveItemSkipped;
-        item.detail = @"Cover, used for songs without one";
+        if (kind && _artwork) {
+            if (!_artwork[kind]) _artwork[kind] = [NSMutableArray array];
+            [_artwork[kind] addObject:path];
+            item.detail = [NSString stringWithFormat:@"The album's %@, kept for Records", what[kind]];
+        } else {
+            item.detail = @"A picture its name does not tell";
+            [NSFileManager.defaultManager removeItemAtPath:path error:nil];
+        }
         advance();
         return;
     }
@@ -629,11 +872,8 @@ static NSString *sizeText(NSString *path) {
                     inside.unpacked = file;
                     [more addObject:inside];
                 }
-                [more sortWithOptions:NSSortStable usingComparator:^NSComparisonResult(SGDriveItem *a, SGDriveItem *b) {
-                    BOOL ca = isCoverName(a.name), cb = isCoverName(b.name);
-                    if (ca != cb) return ca ? NSOrderedAscending : NSOrderedDescending;
-                    return [a.name localizedStandardCompare:b.name];
-                }];
+                [more sortUsingComparator:^NSComparisonResult(SGDriveItem *a, SGDriveItem *b) { return [a.name localizedStandardCompare:b.name]; }];
+                picturesFirst(more);
                 [items insertObjects:more atIndexes:[NSIndexSet indexSetWithIndexesInRange:NSMakeRange(job->_next + 1, more.count)]];
                 job.items = items;
                 advance();
@@ -673,6 +913,7 @@ static NSString *sizeText(NSString *path) {
             if (![NSFileManager.defaultManager moveItemAtPath:path toPath:saved error:nil]) error = @"The song could not be saved.";
         }
         [NSFileManager.defaultManager removeItemAtPath:path error:nil];
+        if (!error) [weakSelf noteAlbumOf:saved];
         dispatch_async(dispatch_get_main_queue(), ^{
             SGDriveJob *job = weakSelf;
             if (!job) return;
@@ -692,16 +933,27 @@ static NSString *sizeText(NSString *path) {
 
 SGDriveJob *SGDriveImportStart(NSString *link) {
     NSCAssert(NSThread.isMainThread, @"drive import starts on main");
+    link = [link stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
     BOOL folder = NO;
-    NSString *fileID = idIn([link stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet], &folder);
-    if (!fileID) return nil;
+    NSString *fileID = idIn(link, &folder);
+    NSURL *address = [NSURL URLWithString:link];
+    BOOL web = [@[@"http", @"https"] containsObject:address.scheme.lowercaseString ?: @""] && address.host.length;
+    if (!fileID && !SGMegaIsLink(link) && !web) return nil;
     SGDriveJob *job = [SGDriveJob new];
     job.link = link;
     job.items = @[];
     if (!sg_jobs) sg_jobs = [NSMutableArray array];
     [sg_jobs insertObject:job atIndex:0];
-    SGLog(@"drive import: %@ %@", folder ? @"folder" : @"file", fileID);
-    [job startWithID:fileID folder:folder];
+    if (fileID) {
+        SGLog(@"link import: Drive %@ %@", folder ? @"folder" : @"file", fileID);
+        [job startWithID:fileID folder:folder];
+    } else if (SGMegaIsLink(link)) {
+        SGLog(@"link import: Mega");
+        [job startMega:link];
+    } else {
+        SGLog(@"link import: a direct link on %@", address.host);
+        [job startDirect:address];
+    }
     return job;
 }
 

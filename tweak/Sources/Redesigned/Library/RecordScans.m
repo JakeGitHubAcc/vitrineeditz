@@ -1,5 +1,6 @@
 #import <CommonCrypto/CommonDigest.h>
 #import "Core/SGCore.h"
+#import "Shared/LocalFiles/DriveImport.h"
 #import "RecordScans.h"
 
 // MusicBrainz asks every program to say who it is.
@@ -418,6 +419,31 @@ static void download(NSString *key, NSDictionary<NSString *, NSString *> *found,
             });
         });
     });
+}
+
+SGRSleeve *SGRSleeveOfArtwork(NSDictionary<NSString *, NSArray<NSString *> *> *artwork, UIImage *cover) {
+    UIImage *(^first)(NSString *) = ^UIImage *(NSString *kind) {
+        NSString *path = artwork[kind].firstObject;
+        UIImage *picture = path ? [UIImage imageWithContentsOfFile:path] : nil;
+        return [picture imageByPreparingForDisplay] ?: picture;
+    };
+    SGRSleeve *sleeve = [SGRSleeve new];
+    sleeve.back = first(SGLocalArtworkBack);
+    sleeve.sticker = first(SGLocalArtworkSticker);
+    UIImage *spine = first(SGLocalArtworkSpine);
+    spine = spine ? lying(spine) : nil;
+    if (spine.size.width >= spine.size.height * 3) sleeve.spine = spine;
+    NSArray<NSString *> *inside = artwork[SGLocalArtworkInside];
+    if (inside.count >= 2) {
+        UIImage *left = [UIImage imageWithContentsOfFile:inside[0]], *right = [UIImage imageWithContentsOfFile:inside[1]];
+        if (left && right) sleeve.gatefold = @[left, right];
+    } else if (inside.count == 1) {
+        UIImage *spread = [UIImage imageWithContentsOfFile:inside[0]];
+        if (spread.size.width > spread.size.height * 1.5) sleeve.gatefold = halves(spread);
+    }
+    if (!sleeve.back && !sleeve.sticker && !sleeve.spine && !sleeve.gatefold && !artwork[SGLocalArtworkFront]) return nil;
+    sleeve.front = first(SGLocalArtworkFront) ?: cover;
+    return sleeve.front ? sleeve : nil;
 }
 
 static void pump(void);
