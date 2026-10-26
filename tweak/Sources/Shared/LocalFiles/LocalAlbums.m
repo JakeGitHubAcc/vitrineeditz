@@ -1,4 +1,5 @@
 // LocalAlbums.h says what the albums are made of and how one plays.
+#import <AVFoundation/AVFoundation.h>
 #import <AudioToolbox/AudioToolbox.h>
 #import "Core/SGCore.h"
 #import "Headers/SPTPlayer.h"
@@ -54,7 +55,7 @@ NSNotificationName const SGLocalAlbumsDidChangeNotification = @"spotifyglass.loc
 // only what changed.
 @interface SGLocalFileTagsRead : NSObject
 @property (nonatomic, copy) NSString *title, *artist, *album;
-@property (nonatomic) NSInteger number, year, seconds;
+@property (nonatomic) NSInteger number, disc, year, seconds;
 @property (nonatomic, strong) NSDate *modified;
 @property (nonatomic) unsigned long long size;
 @end
@@ -156,6 +157,55 @@ static NSString *infoString(NSDictionary *info, const char *key) {
     return text.length ? text : nil;
 }
 
+// The disc number in a file's tags, which AudioToolbox's info dictionary has no key for: an MP4's iTunes "disk"
+// (two big-endian numbers after two zero bytes), an MP3's ID3 TPOS ("2/2"), or wherever else AVFoundation finds
+// one. 0 when there is none.
+static NSInteger discTagOf(NSString *path) {
+    AVURLAsset *asset = [AVURLAsset URLAssetWithURL:[NSURL fileURLWithPath:path] options:nil];
+    NSSet<NSString *> *disc = [NSSet setWithArray:@[AVMetadataIdentifieriTunesMetadataDiscNumber, AVMetadataIdentifierID3MetadataPartOfASet,
+                                                    @"itsk/disk", @"udta/disk", @"id3/TPOS", @"id3/TPA"]];
+    for (AVMetadataItem *item in asset.metadata) {
+        if (!item.identifier || ![disc containsObject:item.identifier]) continue;
+        id value = item.value;
+        if ([value isKindOfClass:NSString.class]) return MAX(0, [value integerValue]);
+        if ([value isKindOfClass:NSNumber.class]) return MAX(0, [value integerValue]);
+        if ([value isKindOfClass:NSData.class] && ((NSData *)value).length >= 4) {
+            const uint8_t *bytes = ((NSData *)value).bytes;
+            return bytes[2] << 8 | bytes[3];
+        }
+    }
+    return 0;
+}
+
+// The disc from a file's name, for a file whose tags have none: "CD2", "Disc 2" or "disk-2" anywhere in it, or a
+// number before the track's in front of it ("2-05 Title", "2.05 Title"); else a track number of three digits,
+// as some taggers write a second disc's fifth track (205). Sets the track's number too where the name gave both.
+static void discFromName(NSString *name, SGLocalFileTagsRead *tags) {
+    static NSRegularExpression *word, *pair;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        word = [NSRegularExpression regularExpressionWithPattern:@"(?:^|[^a-z])(?:cd|disc|disk)\\s*[-_.#]?\\s*(\\d{1,2})(?!\\d)"
+                                                         options:NSRegularExpressionCaseInsensitive error:nil];
+        pair = [NSRegularExpression regularExpressionWithPattern:@"^(\\d{1,2})[-.](\\d{2,3})(?!\\d)" options:0 error:nil];
+    });
+    NSRange all = NSMakeRange(0, name.length);
+    NSTextCheckingResult *found = [word firstMatchInString:name options:0 range:all];
+    if (found) {
+        tags.disc = [name substringWithRange:[found rangeAtIndex:1]].integerValue;
+        return;
+    }
+    found = [pair firstMatchInString:name options:0 range:all];
+    if (found) {
+        tags.disc = [name substringWithRange:[found rangeAtIndex:1]].integerValue;
+        if (!tags.number) tags.number = [name substringWithRange:[found rangeAtIndex:2]].integerValue;
+        return;
+    }
+    if (tags.number >= 101 && tags.number <= 999 && tags.number % 100) {
+        tags.disc = tags.number / 100;
+        tags.number %= 100;
+    }
+}
+
 static SGLocalFileTagsRead *readTags(NSString *path) {
     AudioFileID file = NULL;
     if (AudioFileOpenURL((__bridge CFURLRef)[NSURL fileURLWithPath:path], kAudioFileReadPermission, 0, &file) != noErr || !file) return nil;
@@ -177,6 +227,8 @@ static SGLocalFileTagsRead *readTags(NSString *path) {
         tags.seconds = (NSInteger)duration;
     }
     AudioFileClose(file);
+    tags.disc = discTagOf(path);
+    if (!tags.disc) discFromName(path.lastPathComponent.stringByDeletingPathExtension, tags);
     // A file with no title goes by its name, as in Spotify's Local Files.
     if (!tags.title) tags.title = path.lastPathComponent.stringByDeletingPathExtension;
     return tags;
@@ -252,6 +304,7 @@ static NSArray<SGLocalAlbum *> *scan(NSDictionary<NSString *, NSString *> *seen)
         track.lead = info[@"artist"] ?: tags.artist ?: @"";
         track.album = info[@"album"] ?: tags.album ?: @"";
         track.number = tags.number;
+        track.disc = tags.disc;
         track.year = tags.year;
         track.seconds = tags.seconds;
         track.added = values[NSURLCreationDateKey] ?: modified ?: NSDate.distantPast;

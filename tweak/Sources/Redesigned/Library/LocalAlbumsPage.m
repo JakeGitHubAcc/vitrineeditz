@@ -280,6 +280,8 @@ static const CGFloat kDissolve = 0.46, kTopScrim = 140, kTopScrimAlpha = 0.28;
 // The hero runs a little taller than the cover is wide, as the Music app's album page does.
 static const CGFloat kHeroAspect = 1.1;
 static const CGFloat kTrackRow = 56, kRowMore = 44, kBadgeSide = 15;
+// A disc's heading row.
+static const CGFloat kDiscRow = 44;
 
 @interface SGRLocalAlbumHero : UIView
 @property (nonatomic, readonly) UIImageView *picture;
@@ -504,6 +506,9 @@ static UIControl *rowSource(NSString *symbol, NSString *word, void (^tapped)(voi
     UIControl *_playSource, *_shuffleSource, *_moreSource;
     CGFloat _laidOutWidth;
     NSString *_playing;
+    // The list's rows: a track's index in the album, or a disc's heading as minus its number. Discs have headings only
+    // when the album has more than one.
+    NSArray<NSNumber *> *_rows;
 }
 
 - (instancetype)initWithAlbum:(SGLocalAlbum *)album {
@@ -544,6 +549,10 @@ static UIControl *rowSource(NSString *symbol, NSString *word, void (^tapped)(voi
     [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(fieldColorChanged:) name:SGRFieldColorDidChangeNotification object:_field];
     // A track marked explicit, or renamed, shows it at once.
     [NSNotificationCenter.defaultCenter addObserver:self.tableView selector:@selector(reloadData) name:SGLocalFileEditsDidChangeNotification object:nil];
+    // The tracks' lyrics read for explicit words, one at a time, those read before left alone (LocalExplicit.m).
+    NSMutableArray<NSString *> *uris = [NSMutableArray array];
+    for (SGLocalTrack *track in _album.tracks) if (track.uri) [uris addObject:track.uri];
+    SGLocalFilesCheckLyrics(uris);
     [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(showMotion) name:SGAnimatedCoverSavedNotification object:nil];
     SGAddPlayerStateObserver(self);
     _playing = SGURIString(SGPlayerState().track.URI);
@@ -627,6 +636,7 @@ static UIControl *rowSource(NSString *symbol, NSString *word, void (^tapped)(voi
     }
     if (!now) return;
     _album = now;
+    _rows = nil;
     self.title = now.title;
     [self showAlbum];
 }
@@ -803,18 +813,72 @@ static UIControl *rowSource(NSString *symbol, NSString *word, void (^tapped)(voi
     return [UIMenu menuWithChildren:@[play, edit, explicitMark]];
 }
 
+// The rows for the album as it is: a heading before each disc's tracks ("Disc 1", as Spotify's album page has), once
+// the album has tracks on more than one disc; a track with no disc number goes on the first.
+- (NSArray<NSNumber *> *)rows {
+    if (_rows && _rows.count >= _album.tracks.count) {
+        NSUInteger tracks = 0;
+        for (NSNumber *row in _rows) if (row.integerValue >= 0) tracks++;
+        if (tracks == _album.tracks.count) return _rows;
+    }
+    NSMutableArray<NSNumber *> *rows = [NSMutableArray array];
+    NSMutableSet<NSNumber *> *discs = [NSMutableSet set];
+    for (SGLocalTrack *track in _album.tracks) [discs addObject:@(MAX(track.disc, 1))];
+    NSInteger heading = 0;
+    for (NSUInteger i = 0; i < _album.tracks.count; i++) {
+        NSInteger disc = MAX(_album.tracks[i].disc, 1);
+        if (discs.count > 1 && disc != heading) {
+            heading = disc;
+            [rows addObject:@(-disc)];
+        }
+        [rows addObject:@(i)];
+    }
+    _rows = rows;
+    return rows;
+}
+
+// The track a row shows, NSNotFound for a disc's heading.
+- (NSUInteger)trackAt:(NSIndexPath *)path {
+    NSArray<NSNumber *> *rows = [self rows];
+    NSInteger row = path.row < (NSInteger)rows.count ? rows[(NSUInteger)path.row].integerValue : -1;
+    return row >= 0 && row < (NSInteger)_album.tracks.count ? (NSUInteger)row : NSNotFound;
+}
+
 - (NSInteger)tableView:(UITableView *)table numberOfRowsInSection:(NSInteger)section {
-    return (NSInteger)_album.tracks.count;
+    return (NSInteger)[self rows].count;
 }
 
 - (CGFloat)tableView:(UITableView *)table heightForRowAtIndexPath:(NSIndexPath *)path {
-    return kTrackRow;
+    return [self trackAt:path] == NSNotFound ? kDiscRow : kTrackRow;
+}
+
+- (UITableViewCell *)discCell:(UITableView *)table disc:(NSInteger)disc {
+    UITableViewCell *cell = [table dequeueReusableCellWithIdentifier:@"disc"];
+    if (!cell) {
+        cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:@"disc"];
+        cell.backgroundColor = UIColor.clearColor;
+        cell.selectionStyle = UITableViewCellSelectionStyleNone;
+        UIListContentConfiguration *content = cell.defaultContentConfiguration;
+        content.image = [UIImage systemImageNamed:@"opticaldisc" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:15 weight:UIImageSymbolWeightSemibold]];
+        content.imageProperties.tintColor = SGRSecondary();
+        content.textProperties.font = SGRFont(UIFontTextStyleSubheadline, UIFontWeightBold, UIContentSizeCategoryExtraLarge);
+        content.textProperties.color = SGRSecondary();
+        content.directionalLayoutMargins = NSDirectionalEdgeInsetsMake(SGRGrid * 2, SGRSideMargin, 0, SGRSideMargin);
+        cell.contentConfiguration = content;
+    }
+    UIListContentConfiguration *content = (UIListContentConfiguration *)cell.contentConfiguration;
+    content.text = [NSString stringWithFormat:@"Disc %ld", (long)disc];
+    cell.contentConfiguration = content;
+    cell.accessibilityTraits = UIAccessibilityTraitHeader;
+    return cell;
 }
 
 - (UITableViewCell *)tableView:(UITableView *)table cellForRowAtIndexPath:(NSIndexPath *)path {
+    NSUInteger index = [self trackAt:path];
+    if (index == NSNotFound) return [self discCell:table disc:-[self rows][(NSUInteger)path.row].integerValue];
     SGRLocalTrackCell *cell = [table dequeueReusableCellWithIdentifier:@"track"];
     if (!cell) cell = [[SGRLocalTrackCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:@"track"];
-    SGLocalTrack *track = _album.tracks[(NSUInteger)path.row];
+    SGLocalTrack *track = _album.tracks[index];
     cell.title.text = track.title;
     // The playing track's title in the accent, as Spotify marks it.
     cell.title.textColor = _playing && [_playing isEqualToString:track.uri] ? SGRAccent() : SGRPrimary();
@@ -823,21 +887,27 @@ static UIControl *rowSource(NSString *symbol, NSString *word, void (^tapped)(voi
     cell.credited = track.artist.length > 0;
     cell.explicitMark = SGLocalFileExplicit(track.uri);
     cell.artist.text = track.artist;
-    cell.more.menu = [self menuForTrack:(NSUInteger)path.row];
+    cell.more.menu = [self menuForTrack:index];
     NSString *spoken = cell.credited ? [NSString stringWithFormat:@"%@, %@", track.title, track.artist] : track.title;
     cell.accessibilityLabel = cell.explicitMark ? [spoken stringByAppendingString:@", Explicit"] : spoken;
     [cell setNeedsLayout];
     return cell;
 }
 
+- (BOOL)tableView:(UITableView *)table shouldHighlightRowAtIndexPath:(NSIndexPath *)path {
+    return [self trackAt:path] != NSNotFound;
+}
+
 - (void)tableView:(UITableView *)table didSelectRowAtIndexPath:(NSIndexPath *)path {
     [table deselectRowAtIndexPath:path animated:YES];
-    [self playFrom:(NSUInteger)path.row shuffle:NO];
+    NSUInteger index = [self trackAt:path];
+    if (index != NSNotFound) [self playFrom:index shuffle:NO];
 }
 
 - (UIContextMenuConfiguration *)tableView:(UITableView *)table contextMenuConfigurationForRowAtIndexPath:(NSIndexPath *)path point:(CGPoint)point {
     __weak SGRLocalAlbumPage *weakSelf = self;
-    NSUInteger row = (NSUInteger)path.row;
+    NSUInteger row = [self trackAt:path];
+    if (row == NSNotFound) return nil;
     return [UIContextMenuConfiguration configurationWithIdentifier:nil previewProvider:nil actionProvider:^UIMenu *(NSArray<UIMenuElement *> *suggested) {
         return [weakSelf menuForTrack:row];
     }];
