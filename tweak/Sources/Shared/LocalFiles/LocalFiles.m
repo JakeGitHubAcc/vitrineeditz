@@ -74,6 +74,29 @@ static void storeEdits(NSDictionary<NSString *, NSDictionary *> *edits) {
     else [NSUserDefaults.standardUserDefaults removeObjectForKey:SGKeyLocalFileEdits];
 }
 
+// The other URIs edits are kept under for the same file as `uri`: its names, its length within kSecondsSlack.
+static NSArray<NSString *> *siblingsOf(NSString *uri, NSDictionary<NSString *, NSDictionary *> *edits) {
+    NSInteger seconds = 0;
+    NSString *key = nameKey(uri, &seconds);
+    if (!key) return @[];
+    NSMutableArray<NSString *> *same = [NSMutableArray array];
+    for (NSString *other in edits) {
+        if ([other isEqualToString:uri]) continue;
+        NSInteger otherSeconds = 0;
+        if ([nameKey(other, &otherSeconds) isEqualToString:key] && labs(otherSeconds - seconds) <= kSecondsSlack) [same addObject:other];
+    }
+    return same;
+}
+
+// The file's edits under other spellings dropped, `uri`'s now standing for them all, their covers among `covers`.
+static void dropSiblings(NSString *uri, NSMutableDictionary<NSString *, NSDictionary *> *edits, NSMutableSet<NSString *> *covers) {
+    for (NSString *other in siblingsOf(uri, edits)) {
+        id cover = edits[other][@"cover"];
+        if ([cover isKindOfClass:NSString.class]) [covers addObject:cover];
+        [edits removeObjectForKey:other];
+    }
+}
+
 NSDictionary<NSString *, id> *SGLocalFileEditFor(NSString *uri) {
     if (!SGLocalFileIs(uri)) return nil;
     NSDictionary *edits = allEdits();
@@ -428,13 +451,18 @@ void SGLocalFileSaveEdit(NSString *uri, NSDictionary<NSString *, NSString *> *na
     if (named) edit[@"number"] = renamed || !old[@"number"] ? @((long long)(NSDate.date.timeIntervalSince1970 * 1000)) : old[@"number"];
 
     NSMutableDictionary *edits = [allEdits() mutableCopy];
+    // The file's edit, kept under this spelling of its URI alone: one made under another (the album's page's) would be
+    // found first for that spelling, with what it said before.
+    NSMutableSet<NSString *> *replaced = [NSMutableSet set];
+    dropSiblings(uri, edits, replaced);
     if (edit.count) {
         edits[uri] = edit;
     } else {
         [edits removeObjectForKey:uri];
     }
     storeEdits(edits);
-    if (oldCover && ![edit[@"cover"] isEqual:old[@"cover"]]) forgetCovers([NSSet setWithObject:old[@"cover"]], edits);
+    if (oldCover && ![edit[@"cover"] isEqual:old[@"cover"]]) [replaced addObject:old[@"cover"]];
+    forgetCovers(replaced, edits);
     SGLog(@"local files: %@ %@", uri, edit.count ? [NSString stringWithFormat:@"edited: %@", edit] : @"back to its own tags");
     changed(uri);
 }
@@ -450,7 +478,9 @@ void SGLocalFilesSaveAlbum(NSArray<NSString *> *uris, NSString *album, UIImage *
     for (NSString *uri in uris) {
         if (!SGLocalFileIs(uri)) continue;
         NSDictionary *tags = SGLocalFileTags(uri);
-        NSMutableDictionary<NSString *, id> *edit = [edits[uri] mutableCopy] ?: [NSMutableDictionary dictionary];
+        // What the file was given under any spelling of its URI, kept under this one alone from now on.
+        NSMutableDictionary<NSString *, id> *edit = [(edits[uri] ?: SGLocalFileEditFor(uri)) mutableCopy] ?: [NSMutableDictionary dictionary];
+        dropSiblings(uri, edits, replaced);
         if (album) {
             if (name.length && ![name isEqualToString:tags[@"album"]]) edit[@"album"] = name;
             else [edit removeObjectForKey:@"album"];

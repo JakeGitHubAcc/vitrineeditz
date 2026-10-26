@@ -320,6 +320,10 @@ static UIImage *fitted(UIImage *picture) {
     CALayer *_dim;
     UILabel *_note, *_pulledTitle, *_pulledArtist;
     UIButton *_gateButton, *_customButton;
+    // What the sleeve lookups are doing, small at the bottom of the page.
+    UIView *_status;
+    UILabel *_statusText;
+    UIProgressView *_statusBar;
     // The light on each record in the crate: the shading on its cover, and the dark over its cover and its label.
     NSArray<CAGradientLayer *> *_shades;
     NSArray<CALayer *> *_veils, *_spineVeils;
@@ -450,7 +454,22 @@ static UIImage *fitted(UIImage *picture) {
     _customButton.userInteractionEnabled = NO;
     _customButton.hidden = YES;
     [back addSubview:_customButton];
+    _status = [UIView new];
+    _status.alpha = 0;
+    _status.userInteractionEnabled = NO;
+    _statusText = [UILabel new];
+    _statusText.font = [UIFont systemFontOfSize:12 weight:UIFontWeightMedium];
+    _statusText.textColor = [UIColor colorWithWhite:1 alpha:0.6];
+    _statusText.lineBreakMode = NSLineBreakByTruncatingMiddle;
+    [_status addSubview:_statusText];
+    _statusBar = [[UIProgressView alloc] initWithProgressViewStyle:UIProgressViewStyleBar];
+    _statusBar.progressTintColor = [UIColor colorWithWhite:1 alpha:0.55];
+    _statusBar.trackTintColor = [UIColor colorWithWhite:1 alpha:0.12];
+    [_status addSubview:_statusBar];
+    [back addSubview:_status];
     table.backgroundView = back;
+    [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(scansChanged) name:SGRRecordScansDidChangeNotification object:nil];
+    [self scansChanged];
 
     _spacer = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 1, 1)];
     table.tableFooterView = _spacer;
@@ -496,12 +515,49 @@ static UIImage *fitted(UIImage *picture) {
     _dim.frame = _stage.bounds;
     _floor.frame = _stage.bounds;
     [CATransaction commit];
+    [self placeStatus];
     if (_width != [self recordWidth]) {
         [self dropPulled];
         [self makeLayers];
     }
     [self fitSpacer];
     [self render];
+}
+
+#pragma mark the lookups' status
+
+// At the bottom, above the bars, short of the Customize corner: which album's sleeve is being looked for and where,
+// over a thin bar of how far along it is. Gone while nothing is looked for.
+- (void)placeStatus {
+    CGFloat width = _stage.bounds.size.width - 2 * kCornerRoom - kCornerButton - 12;
+    CGFloat bottom = _stage.bounds.size.height - self.tableView.adjustedContentInset.bottom - kCornerRoom;
+    CGFloat text = ceil(_statusText.font.lineHeight);
+    _status.frame = CGRectMake(kCornerRoom, bottom - text - 8, MAX(0, width), text + 8);
+    _statusText.frame = CGRectMake(0, 0, _status.bounds.size.width, text);
+    _statusBar.frame = CGRectMake(0, text + 5, MIN(_status.bounds.size.width, 160), 2);
+}
+
+- (void)scansChanged {
+    SGRScanStatus *status = SGRRecordScansStatus();
+    if (status) {
+        NSString *album = status.artist.length ? [NSString stringWithFormat:@"%@ by %@", status.title, status.artist] : status.title;
+        NSString *more = status.waiting ? [NSString stringWithFormat:@" · %lu more", (unsigned long)status.waiting] : @"";
+        _statusText.text = [NSString stringWithFormat:@"%@ for %@%@", status.step ?: @"Looking", album, more];
+        [_statusBar setProgress:status.progress animated:_status.alpha > 0];
+    }
+    // Faded out a moment after the last lookup, so one album after another does not flicker.
+    BOOL shown = status != nil;
+    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(hideStatus) object:nil];
+    if (shown) {
+        [UIView animateWithDuration:0.25 animations:^{ self->_status.alpha = 1; }];
+    } else {
+        [self performSelector:@selector(hideStatus) withObject:nil afterDelay:0.8];
+    }
+}
+
+- (void)hideStatus {
+    if (SGRRecordScansStatus()) return;
+    [UIView animateWithDuration:0.4 animations:^{ self->_status.alpha = 0; }];
 }
 
 #pragma mark the list
