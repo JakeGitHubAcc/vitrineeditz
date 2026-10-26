@@ -14,7 +14,8 @@
 //
 // A local album wears the pictures that came with its songs when it was imported from a link (DriveImport.h): its
 // front, back, spine, sticker and inside, as a scanned sleeve is worn. Else, with Vinyl Scans on (the menu), a record
-// wears its sleeve as a vinyl pressing of it was scanned, front, back,
+// wears its sleeve as a vinyl pressing of it was scanned (its cover staying the streaming one, unless the user
+// picks their own), front, back,
 // spine, hype sticker and gatefold, when the Cover Art Archive has them (RecordScans.h); a sticker scanned on its own
 // goes on the front's top right corner, where one usually is. A record with no scanned back has one drawn, its
 // tracks listed in the cover's colors, and a label strip with no spine scan is drawn in them too: the cover's most
@@ -23,8 +24,8 @@
 // Light: in the crate each cover is shaded where the record above meets it and toward its own bottom edge, and the
 // records further from the focus sit in the dark; a record out of the crate casts a shadow behind it, catches a
 // sheen that slides across it as it turns, and goes dark on the side turned from the light. A hype sticker is a
-// layer of its own over the cover, glossier than the cover: a band of light crosses it as the crate scrolls, and
-// again and again while its record is out.
+// layer of its own over the cover, glossier than the cover: a band of light crosses it, clear from corner to corner,
+// as the crate scrolls past and as its record is turned, and stays put while nothing moves.
 //
 // Customize, under a record out of the crate, picks a picture of the user's own for any part of its sleeve, from
 // Photos or Files, in place of the one found (RecordCustom.h); takes its hype sticker off, or moves it, dragged on
@@ -68,11 +69,14 @@ static const NSInteger kKeepPictures = 30, kScanReach = 6;
 // room under it for its title, artist and the gatefold's button, the sleeve's thickness, and a hype sticker's width
 // as a share of the cover's.
 // The light: how dark the records furthest from the focus get, how dark a cover turned away from the light gets, the
-// shadow behind a record out of the crate, and how long the light takes to cross a sticker.
-static const CGFloat kFarDark = 0.55, kTurnedDark = 0.6, kFloorShadow = 0.75, kShine = 2.6;
+// shadow behind a record out of the crate.
+static const CGFloat kFarDark = 0.55, kTurnedDark = 0.6, kFloorShadow = 0.75;
 // A picture picked from Photos or Files is made no larger than this on its longer side before it is kept.
 static const CGFloat kPickedLongest = 1600;
-static const CGFloat kPulledTilt = 4, kPulledPerspective = 1400, kPulledDim = 0.55, kCaption = 110, kThick = 4, kSticker = 0.26;
+// The sleeve out of the crate is as thick as the label strip along its bottom edge, as in the crate.
+static const CGFloat kPulledTilt = 4, kPulledPerspective = 1400, kPulledDim = 0.55, kCaption = 110, kSticker = 0.26;
+// The Customize button's size and its room from the corner.
+static const CGFloat kCornerButton = 40, kCornerRoom = 16;
 
 typedef NS_ENUM(NSInteger, SGRRecordsSort) {
     SGRRecordsSortAdded,
@@ -240,18 +244,25 @@ static CALayer *stickerLayer(UIImage *sticker, CGFloat width) {
     layer.shadowOpacity = 0.4;
     layer.shadowRadius = 1.5;
     layer.shadowOffset = CGSizeMake(0, 1);
-    CAGradientLayer *gloss = [CAGradientLayer layer];
-    gloss.frame = layer.bounds;
-    gloss.startPoint = CGPointMake(0, 0);
-    gloss.endPoint = CGPointMake(1, 1);
-    UIColor *base = [UIColor colorWithWhite:1 alpha:0.14], *band = [UIColor colorWithWhite:1 alpha:0.8];
-    gloss.colors = @[(id)base.CGColor, (id)base.CGColor, (id)band.CGColor, (id)base.CGColor, (id)base.CGColor];
+    // The light, cut to the sticker's shape: a sheen all over, and a band on a layer three times the sticker's size,
+    // moved across it so it comes in past one corner and goes out past the other.
+    CALayer *clip = [CALayer layer];
+    clip.frame = layer.bounds;
     CALayer *shape = [CALayer layer];
-    shape.frame = gloss.bounds;
+    shape.frame = clip.bounds;
     shape.contents = (id)sticker.CGImage;
     shape.contentsGravity = kCAGravityResize;
-    gloss.mask = shape;
-    [layer addSublayer:gloss];
+    clip.mask = shape;
+    clip.backgroundColor = [UIColor colorWithWhite:1 alpha:0.14].CGColor;
+    CAGradientLayer *band = [CAGradientLayer layer];
+    band.bounds = CGRectMake(0, 0, w * 3, h * 3);
+    band.startPoint = CGPointMake(0, 0);
+    band.endPoint = CGPointMake(1, 1);
+    UIColor *none = [UIColor colorWithWhite:1 alpha:0], *light = [UIColor colorWithWhite:1 alpha:0.85];
+    band.colors = @[(id)none.CGColor, (id)light.CGColor, (id)none.CGColor];
+    band.locations = @[@0.44, @0.5, @0.56];
+    [clip addSublayer:band];
+    [layer addSublayer:clip];
     return layer;
 }
 
@@ -260,10 +271,16 @@ static NSArray<NSNumber *> *bandAt(CGFloat place) {
     return @[@0, @(p - 0.12), @(p), @(p + 0.12), @1];
 }
 
-// The band of light across a sticker at `place`, 0 its top left to 1 its bottom right.
+// The band of light across a sticker at `place`: 0 and below clear of its top left corner, 1 and above clear of its
+// bottom right, in between across it. Never animated: it moves only as the record does.
 static void shine(CALayer *sticker, CGFloat place) {
-    CAGradientLayer *gloss = (CAGradientLayer *)sticker.sublayers.firstObject;
-    if ([gloss isKindOfClass:CAGradientLayer.class]) gloss.locations = bandAt(place);
+    CALayer *band = sticker.sublayers.firstObject.sublayers.firstObject;
+    CGSize size = sticker.bounds.size;
+    CGFloat along = (MIN(MAX(place, -0.2), 1.2) - 0.5) * 2;
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    band.position = CGPointMake(size.width / 2 + along * size.width, size.height / 2 + along * size.height);
+    [CATransaction commit];
 }
 
 // A picture picked by the user no larger than kPickedLongest on its longer side, its orientation drawn in.
@@ -296,6 +313,8 @@ static UIImage *fitted(UIImage *picture) {
     NSMutableSet<NSString *> *_asked, *_sleevesAsked, *_tracksAsked;
     // The records wearing their own pictures from an import, whatever Vinyl Scans is.
     NSMutableSet<NSString *> *_ownSleeves;
+    // The records looked for again on being pulled out, this visit.
+    NSMutableSet<NSString *> *_lookedAgain;
     UIImageView *_backdrop;
     UIView *_stage;
     CALayer *_dim;
@@ -346,6 +365,7 @@ static UIImage *fitted(UIImage *picture) {
     _sleevesAsked = [NSMutableSet set];
     _tracksAsked = [NSMutableSet set];
     _ownSleeves = [NSMutableSet set];
+    _lookedAgain = [NSMutableSet set];
     _stickers = [NSMutableDictionary dictionary];
     _stickerLayers = [NSMutableDictionary dictionary];
     _focused = _pulled = _returning = -1;
@@ -419,12 +439,13 @@ static UIImage *fitted(UIImage *picture) {
     _gateButton.userInteractionEnabled = NO;
     _gateButton.hidden = YES;
     [back addSubview:_gateButton];
+    // Small, in the bottom right corner.
     UIButtonConfiguration *custom = [UIButtonConfiguration grayButtonConfiguration];
-    custom.image = [UIImage systemImageNamed:@"paintbrush"];
+    custom.image = [UIImage systemImageNamed:@"paintbrush" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:15 weight:UIImageSymbolWeightMedium]];
     custom.imagePadding = 6;
     custom.cornerStyle = UIButtonConfigurationCornerStyleCapsule;
-    custom.baseForegroundColor = UIColor.whiteColor;
-    custom.title = @"Customize";
+    custom.baseForegroundColor = [UIColor colorWithWhite:1 alpha:0.85];
+    custom.background.backgroundColor = [UIColor colorWithWhite:1 alpha:0.12];
     _customButton = [UIButton buttonWithConfiguration:custom primaryAction:nil];
     _customButton.userInteractionEnabled = NO;
     _customButton.hidden = YES;
@@ -711,7 +732,9 @@ static UIImage *fitted(UIImage *picture) {
 // sleeve has neither a front nor a sticker.
 - (void)composeFrontOf:(NSString *)key {
     SGRSleeve *sleeve = [self sleeveWithKey:key];
-    if (sleeve.front) [_fronts setObject:sleeve.front forKey:key];
+    // The streaming cover, unless the user picked their own: a scan's front only tells the pressing apart.
+    UIImage *front = SGRCustomPicture(key, SGRPartFront);
+    if (front) [_fronts setObject:front forKey:key];
     else [_fronts removeObjectForKey:key];
     if (sleeve.sticker) {
         CGPoint center = defaultStickerCenter(sleeve.sticker);
@@ -743,7 +766,7 @@ static UIImage *fitted(UIImage *picture) {
     }
     CGPoint center = [sticker[1] CGPointValue];
     if (!(_placing && (NSInteger)index == _pulled)) layer.position = CGPointMake(center.x * _width, center.y * _width);
-    if ((NSInteger)index != _pulled) shine(layer, place);
+    shine(layer, (NSInteger)index == _pulled ? [self pulledShine] : place);
     return layer;
 }
 
@@ -955,20 +978,14 @@ static UIImage *fitted(UIImage *picture) {
     if (!cover || [_sleevesAsked containsObject:key]) return;
     [_sleevesAsked addObject:key];
     __weak SGRRecordsPage *weakSelf = self;
-    void (^wear)(SGRSleeve *, BOOL) = ^(SGRSleeve *sleeve, BOOL own) {
-        SGRRecordsPage *page = weakSelf;
-        if (!page || !sleeve.front) return;
-        page->_sleeves[key] = sleeve;
-        if (own) [page->_ownSleeves addObject:key];
-        [page composeFrontOf:key];
-    };
+    void (^wear)(SGRSleeve *, BOOL) = ^(SGRSleeve *sleeve, BOOL own) { [weakSelf wear:sleeve key:key own:own]; };
     // A local album's own pictures, from its import, before any scan.
     void (^scanned)(void) = ^{
         SGRRecordsPage *page = weakSelf;
         if (!page) return;
         // Asked again when Vinyl Scans is switched on (-redrawSleeves).
         if (![page scans]) return;
-        SGRRecordSleeve(record.title, record.artist, record.kind, cover, ^(SGRSleeve *sleeve) { wear(sleeve, NO); });
+        SGRRecordSleeve(record.title, record.artist, record.kind, cover, NO, ^(SGRSleeve *sleeve) { wear(sleeve, NO); });
     };
     NSDictionary<NSString *, NSArray<NSString *> *> *artwork = record.local ? SGLocalAlbumArtwork(record.title, record.artist) : nil;
     if (artwork) {
@@ -982,6 +999,29 @@ static UIImage *fitted(UIImage *picture) {
         return;
     }
     scanned();
+}
+
+- (void)wear:(SGRSleeve *)sleeve key:(NSString *)key own:(BOOL)own {
+    if (!sleeve.front) return;
+    _sleeves[key] = sleeve;
+    if (own) [_ownSleeves addObject:key];
+    [self composeFrontOf:key];
+}
+
+// A record pulled out without a sleeve has one looked for at once, once a visit, even when it was looked for before
+// and none was found; it is worn as it comes in.
+- (void)lookForSleeveOf:(NSUInteger)index {
+    SGRRecord *record = _records[index];
+    NSString *key = [record key];
+    UIImage *cover = [_pictures objectForKey:key];
+    if (![self scans] || _sleeves[key] || !cover || [_lookedAgain containsObject:key]) return;
+    if (record.local && SGLocalAlbumArtwork(record.title, record.artist)) return;
+    [_lookedAgain addObject:key];
+    [_sleevesAsked addObject:key];
+    __weak SGRRecordsPage *weakSelf = self;
+    SGRRecordSleeve(record.title, record.artist, record.kind, cover, YES, ^(SGRSleeve *sleeve) {
+        [weakSelf wear:sleeve key:key own:NO];
+    });
 }
 
 - (void)showBackdrop:(UIImage *)picture {
@@ -1046,7 +1086,7 @@ static UIImage *fitted(UIImage *picture) {
             _veils[i].opacity = dark;
             _spineVeils[i].opacity = dark;
         }
-        [self dressSticker:i place:bottom / MAX(height, 1)];
+        [self dressSticker:i place:(bottom - _width * 0.2) / MAX(height, 1) * 1.4 - 0.2];
         SGRRecord *item = _records[i];
         UIImage *picture = [self faceOf:item];
         if (picture) face.contents = (id)picture.CGImage;
@@ -1138,18 +1178,26 @@ static UIImage *fitted(UIImage *picture) {
 
     CALayer *back = panel(whole, [self backOf:item], edge);
     back.doubleSided = NO;
-    back.zPosition = -kThick;
+    back.zPosition = -kSpine;
     back.transform = CATransform3DMakeRotation(M_PI, 0, 1, 0);
     [record addSublayer:back];
     [extras addObject:back];
-    for (int i = 0; i < 4; i++) {
+    // Its edges as deep as its label: the label itself along the bottom, as in the crate, plain edges at its left and
+    // top, and the opening, darker, at its right, where the record comes out.
+    for (int i = 0; i < 3; i++) {
         CALayer *strip = [CALayer layer];
         BOOL upright = i < 2;
-        strip.bounds = upright ? CGRectMake(0, 0, kThick, side) : CGRectMake(0, 0, side, kThick);
-        strip.position = upright ? CGPointMake(i == 0 ? 0 : side, side / 2) : CGPointMake(side / 2, i == 2 ? 0 : side);
-        strip.zPosition = -kThick / 2;
+        strip.bounds = upright ? CGRectMake(0, 0, kSpine, side) : CGRectMake(0, 0, side, kSpine);
+        strip.position = upright ? CGPointMake(i == 0 ? 0 : side, side / 2) : CGPointMake(side / 2, 0);
+        strip.zPosition = -kSpine / 2;
         strip.transform = upright ? CATransform3DMakeRotation(M_PI_2, 0, 1, 0) : CATransform3DMakeRotation(M_PI_2, 1, 0, 0);
         strip.backgroundColor = edge.CGColor;
+        if (i == 1) {
+            CALayer *opening = [CALayer layer];
+            opening.frame = strip.bounds;
+            opening.backgroundColor = [UIColor colorWithWhite:0 alpha:0.55].CGColor;
+            [strip addSublayer:opening];
+        }
         [record addSublayer:strip];
         [extras addObject:strip];
     }
@@ -1172,7 +1220,7 @@ static UIImage *fitted(UIImage *picture) {
     _backShade.backgroundColor = UIColor.blackColor.CGColor;
     [back addSublayer:_backShade];
     _extras = extras;
-    _spines[index].hidden = YES;
+    _spineVeils[index].opacity = 0;
     [self light];
 }
 
@@ -1186,6 +1234,8 @@ static UIImage *fitted(UIImage *picture) {
     _frontShade.opacity = (float)(kTurnedDark * (1 - MAX(facing, 0)));
     _backShade.opacity = (float)(kTurnedDark * (1 - MAX(-facing, 0)));
     _gloss.locations = bandAt(0.5 + 0.45 * sin(_turn));
+    CALayer *sticker = _stickerLayers[@(_pulled)];
+    if (sticker) shine(sticker, [self pulledShine]);
     CGRect frame = [self pulledFrame];
     CGFloat across = MAX(fabs(facing), 0.06) * frame.size.width;
     _floor.shadowPath = [UIBezierPath bezierPathWithRect:CGRectMake(CGRectGetMidX(frame) - across / 2, frame.origin.y + 10, across, frame.size.height - 10)].CGPath;
@@ -1201,20 +1251,10 @@ static UIImage *fitted(UIImage *picture) {
     [_floor addAnimation:fade forKey:@"fade"];
 }
 
-// The band of light crossing the sticker of the record out of the crate, over and over.
-- (void)shimmer:(BOOL)on {
-    if (_pulled < 0) return;
-    CALayer *sticker = _stickerLayers[@(_pulled)];
-    CAGradientLayer *gloss = (CAGradientLayer *)sticker.sublayers.firstObject;
-    if (![gloss isKindOfClass:CAGradientLayer.class]) return;
-    [gloss removeAnimationForKey:@"shimmer"];
-    if (!on) return;
-    CAKeyframeAnimation *shimmer = [CAKeyframeAnimation animationWithKeyPath:@"locations"];
-    shimmer.values = @[bandAt(0), bandAt(1), bandAt(1)];
-    shimmer.keyTimes = @[@0, @0.45, @1];
-    shimmer.duration = kShine;
-    shimmer.repeatCount = HUGE_VALF;
-    [gloss addAnimation:shimmer forKey:@"shimmer"];
+// Where the band of light sits on the sticker of the record out of the crate: across it facing front, clear of it
+// a quarter turn either way, so it crosses as the record is turned.
+- (CGFloat)pulledShine {
+    return 0.5 + 0.75 * sin(_turn);
 }
 
 // Back to a record in the crate: its front on it again, the rest gone.
@@ -1233,7 +1273,6 @@ static UIImage *fitted(UIImage *picture) {
     [_gloss removeFromSuperlayer];
     [_frontShade removeFromSuperlayer];
     for (CAGradientLayer *shade in _shades) shade.hidden = NO;
-    for (CALayer *sticker in _stickerLayers.allValues) [sticker.sublayers.firstObject removeAnimationForKey:@"shimmer"];
     _gloss = nil;
     _frontShade = _backShade = nil;
     _extras = nil;
@@ -1255,7 +1294,6 @@ static UIImage *fitted(UIImage *picture) {
     }
     [CATransaction commit];
     [self dressSticker:(NSUInteger)_pulled place:0.5];
-    [self shimmer:YES];
     [self light];
     [self placeCaption];
 }
@@ -1308,16 +1346,18 @@ static UIImage *fitted(UIImage *picture) {
     gate.title = _opened ? @"Close Gatefold" : @"Open Gatefold";
     _gateButton.configuration = gate;
     UIButtonConfiguration *custom = _customButton.configuration;
-    custom.title = _placing ? @"Done" : @"Customize";
-    custom.image = [UIImage systemImageNamed:_placing ? @"checkmark" : @"paintbrush"];
+    custom.title = _placing ? @"Done" : nil;
+    custom.image = [UIImage systemImageNamed:_placing ? @"checkmark" : @"paintbrush"
+                           withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:15 weight:UIImageSymbolWeightMedium]];
     _customButton.configuration = custom;
-    // The buttons side by side in the middle.
-    CGSize gateSize = gatefold ? [_gateButton sizeThatFits:CGSizeMake(width, 36)] : CGSizeZero;
-    CGSize customSize = [_customButton sizeThatFits:CGSizeMake(width, 36)];
-    CGFloat gap = gatefold ? 10 : 0, row = gateSize.width + gap + customSize.width;
-    CGFloat x = (_stage.bounds.size.width - row) / 2;
-    _gateButton.frame = CGRectMake(x, bottom + 76, gateSize.width, MAX(gateSize.height, 34));
-    _customButton.frame = CGRectMake(x + gateSize.width + gap, bottom + 76, customSize.width, MAX(customSize.height, 34));
+    _customButton.accessibilityLabel = _placing ? @"Done" : @"Customize";
+    CGSize gateSize = [_gateButton sizeThatFits:CGSizeMake(width, 36)];
+    _gateButton.frame = CGRectMake((_stage.bounds.size.width - gateSize.width) / 2, bottom + 76, gateSize.width, MAX(gateSize.height, 34));
+    // The Customize button in the bottom right corner, above the bars.
+    CGSize customSize = [_customButton sizeThatFits:CGSizeMake(width, kCornerButton)];
+    CGFloat customWidth = MAX(customSize.width, kCornerButton);
+    CGFloat floorLine = _stage.bounds.size.height - self.tableView.adjustedContentInset.bottom - kCornerRoom;
+    _customButton.frame = CGRectMake(_stage.bounds.size.width - kCornerRoom - customWidth, floorLine - kCornerButton, customWidth, kCornerButton);
 }
 
 - (void)pullOut:(NSUInteger)index {
@@ -1340,7 +1380,7 @@ static UIImage *fitted(UIImage *picture) {
     [self light];
     [self fadeFloor:(float)kFloorShadow];
     [self dressSticker:index place:0.5];
-    [self shimmer:YES];
+    [self lookForSleeveOf:index];
 
     SGRRecord *record = _records[index];
     _pulledTitle.text = record.title;

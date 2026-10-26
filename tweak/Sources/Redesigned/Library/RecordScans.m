@@ -514,20 +514,21 @@ static void pump(void) {
     run(job);
 }
 
-void SGRRecordSleeve(NSString *title, NSString *artist, NSString *kind, UIImage *cover, void (^done)(SGRSleeve *sleeve)) {
+void SGRRecordSleeve(NSString *title, NSString *artist, NSString *kind, UIImage *cover, BOOL again, void (^done)(SGRSleeve *sleeve)) {
     if (!title.length) {
         done(nil);
         return;
     }
     NSString *key = [NSString stringWithFormat:@"%@\t%@\t%@", artist.lowercaseString ?: @"", title.lowercaseString, kind ?: @"album"];
     NSDictionary *entry = scanIndex()[key];
-    BOOL stale = entry && !entryHasFront(entry) && -((NSDate *)entry[@"at"]).timeIntervalSinceNow > kAskAgain;
+    BOOL stale = entry && !entryHasFront(entry) && (again || -((NSDate *)entry[@"at"]).timeIntervalSinceNow > kAskAgain);
     if (entry && !stale) {
         if (entryHasFront(entry)) loadEntry(entry, done);
         else done(nil);
         return;
     }
     if (!sg_failed) sg_failed = [NSMutableSet set];
+    if (again) [sg_failed removeObject:key];
     if ([sg_failed containsObject:key]) {
         done(nil);
         return;
