@@ -24,6 +24,13 @@ static NSArray<NSString *> *pictureKinds(void) {
 
 typedef void (^SGRSleeveDone)(SGRSleeve *sleeve);
 
+NSNotificationName const SGRRecordScansDidChangeNotification = @"spotifyglass.records.scansDidChange";
+
+@implementation SGRScanStatus
+@end
+
+static SGRScanStatus *sg_status;
+
 @implementation SGRSleeve
 @end
 
@@ -471,6 +478,9 @@ SGRSleeve *SGRSleeveOfArtwork(NSDictionary<NSString *, NSArray<NSString *> *> *a
 
 static void pump(void);
 
+// The status for the job running now, at `step`; nil job for none.
+static void report(SGRScanJob *job, NSString *step, float progress);
+
 static void finish(SGRScanJob *job, NSDictionary *entry) {
     if (entry) {
         scanIndex()[job.key] = entry;
@@ -486,7 +496,28 @@ static void finish(SGRScanJob *job, NSDictionary *entry) {
     if (entryHasFront(entry)) loadEntry(entry, tell);
     else tell(nil);
     sg_busy = NO;
+    report(nil, nil, 0);
     pump();
+}
+
+
+static void report(SGRScanJob *job, NSString *step, float progress) {
+    if (!job) {
+        sg_status = nil;
+    } else {
+        SGRScanStatus *status = [SGRScanStatus new];
+        status.title = job.title;
+        status.artist = [job.artist componentsSeparatedByString:@", "].firstObject;
+        status.step = step;
+        status.progress = progress;
+        status.waiting = sg_queue.count;
+        sg_status = status;
+    }
+    [NSNotificationCenter.defaultCenter postNotificationName:SGRRecordScansDidChangeNotification object:nil];
+}
+
+SGRScanStatus *SGRRecordScansStatus(void) {
+    return sg_status;
 }
 
 #pragma mark - Discogs
@@ -643,6 +674,7 @@ void SGRRecordScansForgetMissing(void) {
 }
 
 static void run(SGRScanJob *job) {
+    report(job, @"Searching MusicBrainz", 0.1f);
     NSString *title = plainTitle(job.title);
     NSString *artist = [job.artist componentsSeparatedByString:@", "].firstObject ?: @"";
     NSMutableString *query = [NSMutableString stringWithFormat:@"releasegroup:%@ AND %@", quoted(title), kindTerms(job.kind)];
@@ -657,9 +689,14 @@ static void run(SGRScanJob *job) {
         }
         // What MusicBrainz has not, Discogs may.
         void (^elsewhere)(void) = ^{
+            if (discogsToken()) report(job, @"Searching Discogs", 0.6f);
             lookOnDiscogs(job, title, artist, ^(NSDictionary<NSString *, NSString *> *found) {
-                if (!found) finish(job, @{@"at": NSDate.date});
-                else download(job.key, found, ^(NSDictionary *entry) { finish(job, entry); });
+                if (!found) {
+                    finish(job, @{@"at": NSDate.date});
+                    return;
+                }
+                report(job, @"Downloading the scans", 0.9f);
+                download(job.key, found, ^(NSDictionary *entry) { finish(job, entry); });
             });
         };
         NSString *group = groupOf(answer, title);
@@ -668,6 +705,7 @@ static void run(SGRScanJob *job) {
             return;
         }
         NSURL *browse = [NSURL URLWithString:[NSString stringWithFormat:@"https://musicbrainz.org/ws/2/release?release-group=%@&inc=media&fmt=json&limit=100", group]];
+        report(job, @"Listing the vinyl pressings", 0.25f);
         getMusicBrainz(browse, ^(NSInteger listed, id releases) {
             if (listed != 200) {
                 SGLog(@"records: MusicBrainz answered %ld for a group's releases", (long)listed);
@@ -675,10 +713,15 @@ static void run(SGRScanJob *job) {
                 return;
             }
             NSArray<NSString *> *ids = pressings(releases, title);
+            if (ids.count) report(job, @"Checking the Cover Art Archive", 0.4f);
             lookThrough(ids, 0, job.cover, ^(NSDictionary<NSString *, NSString *> *found) {
                 SGLog(@"records: %lu vinyl pressings, sleeve %@", (unsigned long)ids.count, found ? [found.allKeys componentsJoinedByString:@" "] : @"none");
-                if (!found) elsewhere();
-                else download(job.key, found, ^(NSDictionary *entry) { finish(job, entry); });
+                if (!found) {
+                    elsewhere();
+                    return;
+                }
+                report(job, @"Downloading the scans", 0.9f);
+                download(job.key, found, ^(NSDictionary *entry) { finish(job, entry); });
             });
         });
     });

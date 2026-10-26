@@ -28,6 +28,17 @@
 // After the token is set or changed: every album found to have no sleeve is looked for again. Main thread.
 void SGRRecordScansForgetMissing(void);
 
+// What the lookups are doing, for the Records page to show: the album being looked for, what is being asked, and
+// how far along it is (0 to 1); nil while none is. Posted on main as it changes.
+extern NSNotificationName const SGRRecordScansDidChangeNotification;
+@interface SGRScanStatus : NSObject
+@property (nonatomic, copy) NSString *title, *artist, *step;
+@property (nonatomic) float progress;
+// Albums waiting after this one.
+@property (nonatomic) NSUInteger waiting;
+@end
+SGRScanStatus *SGRRecordScansStatus(void);
+
 @interface SGRSleeve : NSObject
 @property (nonatomic, strong) UIImage *front, *back, *spine, *sticker;
 // The inside of a gatefold, its left and right halves; nil when the sleeve has none, or no scan of it.
