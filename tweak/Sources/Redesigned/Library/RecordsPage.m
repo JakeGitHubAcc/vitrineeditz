@@ -27,6 +27,14 @@
 // layer of its own over the cover, glossier than the cover: a band of light crosses it, clear from corner to corner,
 // as the crate scrolls past and as its record is turned, and stays put while nothing moves.
 //
+// Records are pressed in black or the album's most vivid color (the menu's Vinyl Color), or a color Customize picks.
+// A sleeve with no scanned gatefold opens on an inside drawn for it: what Wikipedia says of the album, and when it
+// came out, its label and its tracks. Its left edge carries the spine's label too, standing.
+//
+// The menu's Artist order, the first: compilations and Various Artists at the top, then each artist with their side
+// projects and bands after them (artists sharing a member, from MusicBrainz), newest record at the top. The search in
+// the bar slides the records it leaves out away to the left, and back again as it lets them in.
+//
 // Customize, under a record out of the crate, picks a picture of the user's own for any part of its sleeve, from
 // Photos or Files, in place of the one found (RecordCustom.h); takes its hype sticker off, or moves it, dragged on
 // the front where it should sit.
@@ -59,6 +67,8 @@ static NSString *const kRecordsURI = @"vitrine:records";
 #define SGKeyRecordsTabAdded @"spotifyglass.records.tabAdded"
 // The sleeves' scans; on unless switched off.
 #define SGKeyRecordsScans @"spotifyglass.records.scans"
+// The color a record is pressed in unless Customize picks another: 0 black, 1 the album's most vivid color.
+#define SGKeyRecordsVinylColor @"spotifyglass.records.vinylColor"
 
 // The crate: where the focus sits down the page, how far every record leans back from upright (degrees), the room
 // between records, the label's depth, the perspective's distance and the widest cover.
@@ -102,6 +112,10 @@ typedef NS_ENUM(NSInteger, SGRRecordsShow) {
 @property (nonatomic, copy) NSString *kind;
 // The track names the saved albums' answer gave with the album (its first 50), for a back drawn without a scan.
 @property (nonatomic, copy) NSArray<NSString *> *trackNames;
+// When it came out ("2004-11-12", "2004", or empty), its label, its copyright line and how many tracks it has: the
+// Artist order's release order, and the inside drawn for a sleeve with no scanned gatefold.
+@property (nonatomic, copy) NSString *released, *label, *copyright;
+@property (nonatomic) NSInteger trackCount;
 @property (nonatomic, strong) SGLocalAlbum *local;
 @property (nonatomic, strong) NSDate *added;
 // What tells it apart from every other record: its URI, or a local album's names.
@@ -149,6 +163,12 @@ static SGRRecord *recordOfSaved(id item) {
         if ([track isKindOfClass:NSDictionary.class] && [track[@"name"] isKindOfClass:NSString.class]) [trackNames addObject:track[@"name"]];
     }
     if (trackNames.count) record.trackNames = trackNames;
+    record.released = [album[@"release_date"] isKindOfClass:NSString.class] ? album[@"release_date"] : @"";
+    record.label = [album[@"label"] isKindOfClass:NSString.class] ? album[@"label"] : nil;
+    id copyrights = album[@"copyrights"];
+    id first2 = [copyrights isKindOfClass:NSArray.class] ? [copyrights firstObject] : nil;
+    if ([first2 isKindOfClass:NSDictionary.class] && [first2[@"text"] isKindOfClass:NSString.class]) record.copyright = first2[@"text"];
+    record.trackCount = [album[@"total_tracks"] isKindOfClass:NSNumber.class] ? [album[@"total_tracks"] integerValue] : (NSInteger)trackNames.count;
     return record;
 }
 
@@ -189,6 +209,8 @@ static NSArray<SGRRecord *> *localRecords(void) {
         record.artist = album.artist;
         record.kind = localKind(album);
         record.local = album;
+        record.released = album.year > 0 ? [NSString stringWithFormat:@"%ld", (long)album.year] : @"";
+        record.trackCount = (NSInteger)album.tracks.count;
         record.added = album.added ?: NSDate.distantPast;
         [records addObject:record];
     }
@@ -291,6 +313,19 @@ static void shine(CALayer *sticker, CGFloat place) {
     [CATransaction commit];
 }
 
+// The label strip stood on its end, for the sleeve's left edge: its writing reading down, the letters' tops to the
+// right, as a record's spine reads.
+static UIImage *standing(UIImage *label) {
+    CGSize size = CGSizeMake(label.size.height, label.size.width);
+    UIGraphicsImageRendererFormat *format = [UIGraphicsImageRendererFormat preferredFormat];
+    format.scale = label.scale;
+    return [[[UIGraphicsImageRenderer alloc] initWithSize:size format:format] imageWithActions:^(UIGraphicsImageRendererContext *context) {
+        CGContextTranslateCTM(context.CGContext, size.width, 0);
+        CGContextRotateCTM(context.CGContext, M_PI_2);
+        [label drawInRect:CGRectMake(0, 0, label.size.width, label.size.height)];
+    }];
+}
+
 // A picture picked by the user no larger than kPickedLongest on its longer side, its orientation drawn in.
 static UIImage *fitted(UIImage *picture) {
     CGFloat longest = MAX(picture.size.width, picture.size.height);
@@ -305,7 +340,8 @@ static UIImage *fitted(UIImage *picture) {
 
 #pragma mark - the page
 
-@interface SGRRecordsPage : SGPage <UIGestureRecognizerDelegate, PHPickerViewControllerDelegate, UIDocumentPickerDelegate>
+@interface SGRRecordsPage : SGPage <UIGestureRecognizerDelegate, PHPickerViewControllerDelegate, UIDocumentPickerDelegate, UISearchBarDelegate,
+                                     UIColorPickerViewControllerDelegate>
 @end
 
 @implementation SGRRecordsPage {
@@ -328,6 +364,18 @@ static UIImage *fitted(UIImage *picture) {
     CALayer *_dim;
     UILabel *_note, *_pulledTitle, *_pulledArtist;
     UIButton *_gateButton, *_customButton;
+    // The search: what is typed, each record's place among those it leaves (-1 for one it leaves out), how many it
+    // leaves, and where each record left out stood as it slid away to the left.
+    UISearchBar *_search;
+    NSString *_query;
+    NSArray<NSNumber *> *_ranks;
+    NSUInteger _shownCount;
+    NSMutableDictionary<NSNumber *, NSNumber *> *_awayY;
+    // The inside drawn for a sleeve with no scanned gatefold, and what Wikipedia says of each album.
+    NSCache<NSString *, NSArray<UIImage *> *> *_insides;
+    NSMutableDictionary<NSString *, NSString *> *_about;
+    NSMutableSet<NSString *> *_aboutAsked;
+    BOOL _familiesWaiting;
     // The layer the record out of the crate is lifted onto; the record's opening edge; the disc slid out of it on the
     // way to its album, and whether it is sliding.
     UIView *_lifted;
@@ -383,6 +431,10 @@ static UIImage *fitted(UIImage *picture) {
     _tracksAsked = [NSMutableSet set];
     _ownSleeves = [NSMutableSet set];
     _lookedAgain = [NSMutableSet set];
+    _awayY = [NSMutableDictionary dictionary];
+    _insides = [NSCache new];
+    _about = [NSMutableDictionary dictionary];
+    _aboutAsked = [NSMutableSet set];
     _stickers = [NSMutableDictionary dictionary];
     _stickerLayers = [NSMutableDictionary dictionary];
     _focused = _pulled = _returning = -1;
@@ -507,6 +559,15 @@ static UIImage *fitted(UIImage *picture) {
     [table addGestureRecognizer:_turner];
     _tick = [UISelectionFeedbackGenerator new];
 
+    // The search, in the bar's middle where the title was.
+    _search = [UISearchBar new];
+    _search.searchBarStyle = UISearchBarStyleMinimal;
+    _search.placeholder = @"Search Records";
+    _search.delegate = self;
+    _search.autocapitalizationType = UITextAutocapitalizationTypeNone;
+    _search.searchTextField.textColor = UIColor.whiteColor;
+    self.navigationItem.titleView = _search;
+    [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(familiesChanged) name:SGRArtistFamiliesDidChangeNotification object:nil];
     [self updateMenu];
     [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(rebuild) name:SGLocalAlbumsDidChangeNotification object:nil];
     [self rebuild];
@@ -592,7 +653,7 @@ static UIImage *fitted(UIImage *picture) {
 #pragma mark the list
 
 - (SGRRecordsSort)sort {
-    return (SGRRecordsSort)MIN(MAX(SGInt(SGKeyRecordsSort, SGRRecordsSortAdded), 0), 2);
+    return (SGRRecordsSort)MIN(MAX(SGInt(SGKeyRecordsSort, SGRRecordsSortArtist), 0), 2);
 }
 
 - (SGRRecordsShow)show {
@@ -633,6 +694,7 @@ static UIImage *fitted(UIImage *picture) {
     UIMenu *menu = [UIMenu menuWithChildren:@[
         choices(@"Sort By", SGKeyRecordsSort, @[@"Recently Added", @"Title", @"Artist"], [self sort]),
         choices(@"Show", SGKeyRecordsShow, @[@"All Albums", @"Spotify", @"Local Albums"], [self show]),
+        choices(@"Vinyl Color", SGKeyRecordsVinylColor, @[@"Black", @"Album Color"], MIN(MAX(SGInt(SGKeyRecordsVinylColor, 0), 0), 1)),
         [UIMenu menuWithTitle:@"" image:nil identifier:nil options:UIMenuOptionsDisplayInline children:@[scans, discogs]],
     ]];
     UIBarButtonItem *item = [[UIBarButtonItem alloc] initWithImage:[UIImage systemImageNamed:@"line.3.horizontal.decrease"] menu:menu];
@@ -705,12 +767,7 @@ static UIImage *fitted(UIImage *picture) {
     SGRRecordsShow show = [self show];
     if (show != SGRRecordsShowLocal) [records addObjectsFromArray:sg_savedAlbums ?: @[]];
     if (show != SGRRecordsShowSpotify) [records addObjectsFromArray:localRecords()];
-    SGRRecordsSort sort = [self sort];
-    [records sortUsingComparator:^NSComparisonResult(SGRRecord *a, SGRRecord *b) {
-        if (sort == SGRRecordsSortAdded) return [b.added compare:a.added];
-        NSComparisonResult order = sort == SGRRecordsSortArtist ? [a.artist localizedStandardCompare:b.artist] : NSOrderedSame;
-        return order != NSOrderedSame ? order : [a.title localizedStandardCompare:b.title];
-    }];
+    [self sortRecords:records];
 
     // The focused record stays focused when it is still there.
     SGRRecord *was = _focused >= 0 && _focused < (NSInteger)_records.count ? _records[(NSUInteger)_focused] : nil;
@@ -721,17 +778,178 @@ static UIImage *fitted(UIImage *picture) {
         if ([[records[i] key] isEqualToString:[was key]]) keep = i;
     }
     _focused = -1;
+    [_awayY removeAllObjects];
+    [self rankBy:_query];
     [self makeLayers];
     [self fitSpacer];
     UITableView *table = self.tableView;
     CGFloat top = table.adjustedContentInset.top;
-    [table setContentOffset:CGPointMake(0, (keep == NSNotFound ? 0 : (CGFloat)keep) * [self step] - top) animated:NO];
+    NSInteger rank = keep == NSNotFound ? 0 : MAX(0, [self rankOf:keep]);
+    [table setContentOffset:CGPointMake(0, (CGFloat)rank * [self step] - top) animated:NO];
     [self updateNote];
     [self render];
 }
 
+// The first artist a record names, whose record it is.
+static NSString *leadOf(SGRRecord *record) {
+    return [record.artist componentsSeparatedByString:@", "].firstObject ?: @"";
+}
+
+static BOOL variousArtists(SGRRecord *record) {
+    return [record.kind isEqualToString:@"compilation"] || [record.artist caseInsensitiveCompare:@"Various Artists"] == NSOrderedSame;
+}
+
+// The order the menu picks. By artist: compilations and Various Artists first, at the top; then each artist A to Z,
+// with the artists sharing a member with them (their side projects, their bands) right after them, the one with the
+// most albums here leading; each artist's records newest at the top, their first at the bottom.
+- (void)sortRecords:(NSMutableArray<SGRRecord *> *)records {
+    SGRRecordsSort sort = [self sort];
+    if (sort == SGRRecordsSortAdded) {
+        [records sortUsingComparator:^NSComparisonResult(SGRRecord *a, SGRRecord *b) { return [b.added compare:a.added]; }];
+        return;
+    }
+    if (sort == SGRRecordsSortTitle) {
+        [records sortUsingComparator:^NSComparisonResult(SGRRecord *a, SGRRecord *b) { return [a.title localizedStandardCompare:b.title]; }];
+        return;
+    }
+    NSCountedSet<NSString *> *counts = [NSCountedSet set];
+    for (SGRRecord *record in records) if (!variousArtists(record)) [counts addObject:leadOf(record)];
+    NSArray<NSString *> *artists = counts.allObjects;
+    SGRLookUpArtists(artists);
+    // The artists in one family when the people in them meet, the family led by the one with the most records.
+    NSMutableDictionary<NSString *, NSString *> *family = [NSMutableDictionary dictionary];
+    for (NSString *artist in artists) family[artist] = artist;
+    NSString *(^root)(NSString *) = ^NSString *(NSString *artist) {
+        NSString *at = artist;
+        for (NSUInteger hops = 0; hops < 64 && ![family[at] isEqualToString:at]; hops++) at = family[at];
+        return at;
+    };
+    for (NSUInteger i = 0; i < artists.count; i++) {
+        NSSet<NSString *> *people = SGRArtistPeople(artists[i]);
+        if (!people.count) continue;
+        for (NSUInteger j = i + 1; j < artists.count; j++) {
+            if (![people intersectsSet:SGRArtistPeople(artists[j]) ?: [NSSet set]]) continue;
+            NSString *a = root(artists[i]), *b = root(artists[j]);
+            if ([a isEqualToString:b]) continue;
+            BOOL aLeads = [counts countForObject:a] > [counts countForObject:b]
+                       || ([counts countForObject:a] == [counts countForObject:b] && [a localizedStandardCompare:b] == NSOrderedAscending);
+            if (aLeads) family[b] = a;
+            else family[a] = b;
+        }
+    }
+    [records sortUsingComparator:^NSComparisonResult(SGRRecord *a, SGRRecord *b) {
+        BOOL va = variousArtists(a), vb = variousArtists(b);
+        if (va != vb) return va ? NSOrderedAscending : NSOrderedDescending;
+        if (!va) {
+            NSString *la = leadOf(a), *lb = leadOf(b), *fa = root(la), *fb = root(lb);
+            NSComparisonResult byFamily = [fa localizedStandardCompare:fb];
+            if (byFamily != NSOrderedSame) return byFamily;
+            BOOL ma = [la isEqualToString:fa], mb = [lb isEqualToString:fb];
+            if (ma != mb) return ma ? NSOrderedAscending : NSOrderedDescending;
+            NSComparisonResult byArtist = [la localizedStandardCompare:lb];
+            if (byArtist != NSOrderedSame) return byArtist;
+        }
+        NSComparisonResult byDate = [(b.released ?: @"") compare:(a.released ?: @"")];
+        return byDate != NSOrderedSame ? byDate : [a.title localizedStandardCompare:b.title];
+    }];
+}
+
+// More artists' families known: the Artist order made again, once the crate is still.
+- (void)familiesChanged {
+    if ([self sort] != SGRRecordsSortArtist) return;
+    if (_pulled >= 0 || self.tableView.isDragging || self.tableView.isDecelerating || !self.view.window) {
+        _familiesWaiting = YES;
+        return;
+    }
+    _familiesWaiting = NO;
+    [self rebuild];
+}
+
+#pragma mark searching
+
+static BOOL matches(SGRRecord *record, NSString *query) {
+    if (!query.length) return YES;
+    NSStringCompareOptions loose = NSCaseInsensitiveSearch | NSDiacriticInsensitiveSearch;
+    return [record.title rangeOfString:query options:loose].location != NSNotFound || [record.artist rangeOfString:query options:loose].location != NSNotFound;
+}
+
+- (void)rankBy:(NSString *)query {
+    NSMutableArray<NSNumber *> *ranks = [NSMutableArray arrayWithCapacity:_records.count];
+    NSUInteger shown = 0;
+    for (SGRRecord *record in _records) [ranks addObject:@(matches(record, query) ? (NSInteger)shown++ : -1)];
+    _ranks = ranks;
+    _shownCount = shown;
+}
+
+- (NSInteger)rankOf:(NSUInteger)index {
+    return index < _ranks.count ? _ranks[index].integerValue : (NSInteger)index;
+}
+
+- (NSInteger)indexAtRank:(NSInteger)rank {
+    for (NSUInteger i = 0; i < _ranks.count; i++) if (_ranks[i].integerValue == rank) return (NSInteger)i;
+    return -1;
+}
+
+// The records the search leaves out slide away to the left; the rest close up, the focused one kept where it is when
+// it stays; and back again as the search lets them in.
+- (void)searchFor:(NSString *)query {
+    if (_pulled >= 0) [self dropPulled];
+    NSArray<NSNumber *> *oldRanks = _ranks;
+    CGFloat oldFocus = [self focus], line = [self focusLine], step = [self step];
+    CGFloat middle = _stage.bounds.size.width / 2, away = middle - _stage.bounds.size.width * 1.2;
+    NSInteger focusedIndex = _focused;
+    _query = query.length ? query : nil;
+    [self rankBy:_query];
+    NSMutableDictionary<NSNumber *, NSValue *> *before = [NSMutableDictionary dictionary];
+    for (NSUInteger i = 0; i < _records.count; i++) {
+        NSInteger was = i < oldRanks.count ? oldRanks[i].integerValue : -1;
+        NSNumber *awayY = _awayY[@(i)];
+        CGPoint at = was >= 0 ? CGPointMake(middle, line + ((CGFloat)was - oldFocus) * step) : CGPointMake(away, awayY ? awayY.doubleValue : -10000);
+        before[@(i)] = [NSValue valueWithCGPoint:at];
+        if (was >= 0 && [self rankOf:i] < 0) _awayY[@(i)] = @(at.y);
+    }
+    [self fitSpacer];
+    NSInteger keep = focusedIndex >= 0 ? [self rankOf:(NSUInteger)focusedIndex] : -1;
+    UITableView *table = self.tableView;
+    [table setContentOffset:CGPointMake(0, (CGFloat)MAX(keep, 0) * step - table.adjustedContentInset.top) animated:NO];
+    _focused = -1;
+    [self render];
+    [self updateNote];
+    for (NSUInteger i = 0; i < _layers.count; i++) {
+        CATransformLayer *layer = _layers[i];
+        CGPoint from = before[@(i)].CGPointValue, to = layer.position;
+        if (layer.hidden || CGPointEqualToPoint(from, to) || from.y < -5000) continue;
+        CABasicAnimation *slide = [CABasicAnimation animationWithKeyPath:@"position"];
+        slide.fromValue = [NSValue valueWithCGPoint:from];
+        slide.toValue = [NSValue valueWithCGPoint:to];
+        slide.duration = 0.4;
+        slide.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut];
+        [layer addAnimation:slide forKey:@"search"];
+    }
+}
+
+- (void)searchBar:(UISearchBar *)bar textDidChange:(NSString *)text {
+    [self searchFor:[text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet]];
+}
+
+- (void)searchBarTextDidBeginEditing:(UISearchBar *)bar {
+    [bar setShowsCancelButton:YES animated:YES];
+}
+
+- (void)searchBarSearchButtonClicked:(UISearchBar *)bar {
+    [bar resignFirstResponder];
+}
+
+- (void)searchBarCancelButtonClicked:(UISearchBar *)bar {
+    bar.text = @"";
+    [bar setShowsCancelButton:NO animated:YES];
+    [bar resignFirstResponder];
+    [self searchFor:nil];
+}
+
 - (void)updateNote {
-    if (_records.count) _note.text = nil;
+    if (_records.count && _shownCount) _note.text = nil;
+    else if (_records.count) _note.text = @"No records match.";
     else if (_loading) _note.text = @"Loading your albums…";
     else _note.text = [self show] == SGRRecordsShowLocal ? @"No local albums yet." : @"No albums yet. Albums you save on Spotify and your local albums show here.";
     _note.hidden = !_note.text;
@@ -742,7 +960,7 @@ static UIImage *fitted(UIImage *picture) {
     UITableView *table = self.tableView;
     UIEdgeInsets inset = table.adjustedContentInset;
     CGFloat visible = MAX(0, table.bounds.size.height - inset.top - inset.bottom);
-    CGFloat height = visible + (CGFloat)(_records.count ? _records.count - 1 : 0) * [self step];
+    CGFloat height = visible + (CGFloat)(_shownCount ? _shownCount - 1 : 0) * [self step];
     if (fabs(_spacer.frame.size.height - height) < 0.5) return;
     _spacer.frame = CGRectMake(0, 0, table.bounds.size.width, height);
     table.tableFooterView = _spacer;
@@ -898,7 +1116,105 @@ static UIImage *fitted(UIImage *picture) {
 }
 
 - (NSArray<UIColor *> *)colorsOf:(SGRRecord *)record {
-    return _colors[[record key]] ?: @[[UIColor colorWithWhite:0.106 alpha:1], UIColor.whiteColor];
+    return _colors[[record key]] ?: @[[UIColor colorWithWhite:0.106 alpha:1], UIColor.whiteColor, UIColor.blackColor];
+}
+
+// The color the record is pressed in: Customize's pick, else the page's default, black or the album's most vivid.
+- (UIColor *)vinylColorOf:(SGRRecord *)record {
+    NSString *vinyl = SGRCustomVinyl([record key]) ?: (SGInt(SGKeyRecordsVinylColor, 0) == 1 ? @"cover" : @"black");
+    if ([vinyl isEqualToString:@"cover"]) {
+        NSArray<UIColor *> *colors = [self colorsOf:record];
+        return colors.count > 2 ? colors[2] : UIColor.blackColor;
+    }
+    if ([vinyl hasPrefix:@"#"] && vinyl.length == 7) {
+        unsigned int rgb = 0;
+        [[NSScanner scannerWithString:[vinyl substringFromIndex:1]] scanHexInt:&rgb];
+        return [UIColor colorWithRed:((rgb >> 16) & 0xFF) / 255.0 green:((rgb >> 8) & 0xFF) / 255.0 blue:(rgb & 0xFF) / 255.0 alpha:1];
+    }
+    return UIColor.blackColor;
+}
+
+// The inside of the sleeve: its scanned or picked gatefold, else one drawn: what Wikipedia says of the album on the
+// left, and when it came out, its label, its tracks and its copyright on the right.
+- (BOOL)insideFound:(SGRRecord *)record {
+    return [self sleeveOf:record].gatefold.count == 2;
+}
+
+- (NSArray<UIImage *> *)insideOf:(SGRRecord *)record {
+    SGRSleeve *sleeve = [self sleeveOf:record];
+    if (sleeve.gatefold.count == 2) return sleeve.gatefold;
+    NSString *key = [record key];
+    NSArray<UIImage *> *drawn = [_insides objectForKey:key];
+    if (drawn) return drawn;
+    if (![_aboutAsked containsObject:key]) {
+        [_aboutAsked addObject:key];
+        __weak SGRRecordsPage *weakSelf = self;
+        SGRAlbumAbout(record.title, record.artist, ^(NSString *about) {
+            SGRRecordsPage *page = weakSelf;
+            if (!page) return;
+            page->_about[key] = about ?: @"";
+            [page->_insides removeObjectForKey:key];
+            if (page->_pulled >= 0 && [[page->_records[(NSUInteger)page->_pulled] key] isEqualToString:key]) [page redressPulled];
+        });
+    }
+    NSString *about = _about[key];
+    NSArray<UIColor *> *colors = [self colorsOf:record];
+    UIColor *paper = colors.firstObject, *ink = colors[1];
+    CGSize size = CGSizeMake(_width, _width);
+    CGFloat pad = round(size.width * 0.08), inner = size.width - 2 * pad;
+    UIGraphicsImageRendererFormat *format = [UIGraphicsImageRendererFormat preferredFormat];
+    format.opaque = YES;
+    NSStringDrawingOptions options = NSStringDrawingUsesLineFragmentOrigin | NSStringDrawingTruncatesLastVisibleLine;
+    NSDictionary *heading = @{NSFontAttributeName: [UIFont systemFontOfSize:13 weight:UIFontWeightHeavy], NSForegroundColorAttributeName: ink};
+    NSMutableParagraphStyle *lines = [NSMutableParagraphStyle new];
+    lines.lineSpacing = 2;
+    lines.lineBreakMode = NSLineBreakByWordWrapping;
+    NSDictionary *body = @{NSFontAttributeName: [UIFont systemFontOfSize:10.5], NSForegroundColorAttributeName: [ink colorWithAlphaComponent:0.9],
+                           NSParagraphStyleAttributeName: lines};
+    UIImage *left = [[[UIGraphicsImageRenderer alloc] initWithSize:size format:format] imageWithActions:^(UIGraphicsImageRendererContext *context) {
+        [paper setFill];
+        UIRectFill(CGRectMake(0, 0, size.width, size.height));
+        [@"ABOUT THIS ALBUM" drawWithRect:CGRectMake(pad, pad, inner, 20) options:options attributes:heading context:nil];
+        NSString *text = about == nil ? @"Looking for this album online…" : about.length ? about : @"Nothing was found about this album online.";
+        [text drawWithRect:CGRectMake(pad, pad + 28, inner, size.height - 2 * pad - 28) options:options attributes:body context:nil];
+    }];
+    NSMutableArray<NSString *> *facts = [NSMutableArray array];
+    NSString *released = record.released;
+    if (released.length >= 10) {
+        NSDateFormatter *read = [NSDateFormatter new], *write = [NSDateFormatter new];
+        read.dateFormat = @"yyyy-MM-dd";
+        read.locale = [NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
+        write.dateStyle = NSDateFormatterLongStyle;
+        NSDate *date = [read dateFromString:[released substringToIndex:10]];
+        if (date) released = [write stringFromDate:date];
+    }
+    if (released.length) [facts addObject:[@"Released " stringByAppendingString:released]];
+    if (record.label.length) [facts addObject:record.label];
+    if (record.trackCount > 0) [facts addObject:[NSString stringWithFormat:@"%ld %@", (long)record.trackCount, record.trackCount == 1 ? @"song" : @"songs"]];
+    if (record.local) [facts addObject:@"From your local files"];
+    UIImage *right = [[[UIGraphicsImageRenderer alloc] initWithSize:size format:format] imageWithActions:^(UIGraphicsImageRendererContext *context) {
+        [paper setFill];
+        UIRectFill(CGRectMake(0, 0, size.width, size.height));
+        NSDictionary *title = @{NSFontAttributeName: [UIFont systemFontOfSize:17 weight:UIFontWeightHeavy], NSForegroundColorAttributeName: ink};
+        NSDictionary *byline = @{NSFontAttributeName: [UIFont systemFontOfSize:12 weight:UIFontWeightMedium], NSForegroundColorAttributeName: [ink colorWithAlphaComponent:0.75]};
+        CGFloat y = pad;
+        CGRect titleRect = [record.title boundingRectWithSize:CGSizeMake(inner, 64) options:options attributes:title context:nil];
+        [record.title drawWithRect:CGRectMake(pad, y, inner, 64) options:options attributes:title context:nil];
+        y += ceil(MIN(titleRect.size.height, 64)) + 4;
+        [record.artist ?: @"" drawWithRect:CGRectMake(pad, y, inner, 18) options:options attributes:byline context:nil];
+        y += 32;
+        for (NSString *fact in facts) {
+            [fact drawWithRect:CGRectMake(pad, y, inner, 16) options:options attributes:body context:nil];
+            y += 18;
+        }
+        if (record.copyright.length) {
+            NSDictionary *small = @{NSFontAttributeName: [UIFont systemFontOfSize:8.5], NSForegroundColorAttributeName: [ink colorWithAlphaComponent:0.6]};
+            [record.copyright drawWithRect:CGRectMake(pad, size.height - pad - 24, inner, 24) options:options attributes:small context:nil];
+        }
+    }];
+    drawn = @[left, right];
+    if (about) [_insides setObject:drawn forKey:key];
+    return drawn;
 }
 
 // The strip along the record's bottom edge: the sleeve's own spine when one was found, else the title and the
@@ -1078,10 +1394,11 @@ static UIImage *fitted(UIImage *picture) {
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
             UIColor *back = nil, *ink = nil;
             SGRSpineColors(picture, &back, &ink);
+            UIColor *vivid = SGRProminentColor(picture);
             dispatch_async(dispatch_get_main_queue(), ^{
                 SGRRecordsPage *later = weakSelf;
                 if (!later || !back || !ink) return;
-                later->_colors[key] = @[back, ink];
+                later->_colors[key] = @[back, ink, vivid];
                 [later redrawRecordWithKey:key];
             });
         });
@@ -1163,7 +1480,7 @@ static UIImage *fitted(UIImage *picture) {
 - (CGFloat)focus {
     UITableView *table = self.tableView;
     CGFloat focus = (table.contentOffset.y + table.adjustedContentInset.top) / [self step];
-    return MIN(MAX(focus, 0), (CGFloat)(_records.count ? _records.count - 1 : 0));
+    return MIN(MAX(focus, 0), (CGFloat)(_shownCount ? _shownCount - 1 : 0));
 }
 
 // Where the focus sits, in the stage's coordinates.
@@ -1178,9 +1495,15 @@ static UIImage *fitted(UIImage *picture) {
     return recordPose(0, CATransform3DIdentity, kTilt, kPerspective, _width);
 }
 
-// Record `index`'s bottom edge down the stage, a step from the next, the focus on the focus line.
+// Record `index`'s bottom edge down the stage, a step from the next of those the search leaves, the focus on the focus
+// line; one the search leaves out stays where it stood as it slid away.
 - (CGFloat)bottomOf:(NSUInteger)index focus:(CGFloat)focus {
-    return [self focusLine] + ((CGFloat)index - focus) * [self step];
+    NSInteger rank = [self rankOf:index];
+    if (rank < 0) {
+        NSNumber *awayY = _awayY[@(index)];
+        return awayY ? awayY.doubleValue : -10000;
+    }
+    return [self focusLine] + ((CGFloat)rank - focus) * [self step];
 }
 
 - (void)render {
@@ -1198,8 +1521,10 @@ static UIImage *fitted(UIImage *picture) {
         BOOL apart = (NSInteger)i == _pulled || (NSInteger)i == _returning;
         CATransformLayer *record = _layers[i];
         CGFloat bottom = [self bottomOf:i focus:focus];
-        BOOL near = fabs((CGFloat)i - focus) <= kKeepPictures;
-        BOOL shown = apart || (near && bottom > -kSpine && bottom - _width < height + kSpine);
+        NSInteger rank = [self rankOf:i];
+        BOOL onScreen = bottom > -kSpine && bottom - _width < height + kSpine;
+        BOOL near = rank >= 0 ? fabs((CGFloat)rank - focus) <= kKeepPictures : onScreen;
+        BOOL shown = apart || (near && onScreen);
         record.hidden = !shown;
         CALayer *face = _faces[i], *spine = _spines[i];
         if (!near && !apart) {
@@ -1209,7 +1534,8 @@ static UIImage *fitted(UIImage *picture) {
         }
         if (!shown) continue;
         if (!apart) {
-            record.position = CGPointMake(middle, bottom);
+            // One the search leaves out, off to the left.
+            record.position = CGPointMake(rank >= 0 ? middle : middle - _stage.bounds.size.width * 1.2, bottom);
             record.transform = crate;
             // The further from the focus, the darker.
             float dark = (float)MIN(kFarDark, fabs(bottom - line) / MAX(height, 1) * kFarDark * 1.6);
@@ -1221,13 +1547,13 @@ static UIImage *fitted(UIImage *picture) {
         UIImage *picture = [self faceOf:item];
         if (picture) face.contents = (id)picture.CGImage;
         if (![_pictures objectForKey:[item key]]) [self askPictureOf:i];
-        else if ((scans || item.local) && fabs((CGFloat)i - focus) <= kScanReach) [self askSleeveOf:i];
+        else if ((scans || item.local) && rank >= 0 && fabs((CGFloat)rank - focus) <= kScanReach) [self askSleeveOf:i];
         if (!spine.contents) spine.contents = (id)[self labelFor:item].CGImage;
     }
     [CATransaction commit];
 
-    NSInteger focused = (NSInteger)lround(focus);
-    if (focused != _focused) {
+    NSInteger focused = _shownCount ? [self indexAtRank:lround(focus)] : -1;
+    if (focused != _focused && focused >= 0) {
         if (_focused >= 0 && (self.tableView.isDragging || self.tableView.isDecelerating)) [_tick selectionChanged];
         _focused = focused;
         UIImage *picture = [self faceOf:_records[(NSUInteger)focused]];
@@ -1277,7 +1603,6 @@ static UIImage *fitted(UIImage *picture) {
     CATransformLayer *record = _layers[index];
     CALayer *face = _faces[index];
     SGRRecord *item = _records[index];
-    SGRSleeve *sleeve = [self sleeveOf:item];
     UIColor *edge = [self colorsOf:item].firstObject;
     CGFloat side = _width;
     CGRect whole = CGRectMake(0, 0, side, side);
@@ -1291,13 +1616,14 @@ static UIImage *fitted(UIImage *picture) {
     face.frame = whole;
     face.doubleSided = NO;
     [_flap addSublayer:face];
-    if (sleeve.gatefold.count == 2) {
-        CALayer *left = panel(whole, sleeve.gatefold[0], edge);
+    NSArray<UIImage *> *inside = [self insideOf:item];
+    if (inside.count == 2) {
+        CALayer *left = panel(whole, inside[0], edge);
         left.doubleSided = NO;
         left.zPosition = -0.5;
         left.transform = CATransform3DMakeRotation(M_PI, 0, 1, 0);
         [_flap addSublayer:left];
-        CALayer *right = panel(whole, sleeve.gatefold[1], edge);
+        CALayer *right = panel(whole, inside[1], edge);
         right.doubleSided = NO;
         right.zPosition = -1;
         [record addSublayer:right];
@@ -1322,6 +1648,12 @@ static UIImage *fitted(UIImage *picture) {
         strip.zPosition = -kSpine / 2;
         strip.transform = upright ? CATransform3DMakeRotation(M_PI_2, 0, 1, 0) : CATransform3DMakeRotation(M_PI_2, 1, 0, 0);
         strip.backgroundColor = edge.CGColor;
+        // The left edge is the spine too, its label standing, reading down.
+        if (i == 0) {
+            strip.contents = (id)standing([self labelFor:item]).CGImage;
+            strip.contentsGravity = kCAGravityResize;
+            strip.contentsScale = UIScreen.mainScreen.scale;
+        }
         if (i == 1) {
             CALayer *opening = [CALayer layer];
             opening.frame = strip.bounds;
@@ -1421,7 +1753,7 @@ static UIImage *fitted(UIImage *picture) {
     [CATransaction begin];
     [CATransaction setDisableActions:YES];
     [self dress:(NSUInteger)_pulled];
-    if (opened && [self sleeveOf:_records[(NSUInteger)_pulled]].gatefold.count == 2) {
+    if (opened && _flap) {
         _flap.transform = CATransform3DMakeRotation(-M_PI, 0, 1, 0);
     } else if (opened) {
         _opened = NO;
@@ -1474,11 +1806,13 @@ static UIImage *fitted(UIImage *picture) {
     CGFloat bottom = [self pulledBottom], width = _stage.bounds.size.width - 48;
     _pulledTitle.frame = CGRectMake(24, bottom + 18, width, 26);
     _pulledArtist.frame = CGRectMake(24, bottom + 46, width, 20);
-    BOOL gatefold = _pulled >= 0 && !_placing && [self sleeveOf:_records[(NSUInteger)_pulled]].gatefold.count == 2;
+    BOOL gatefold = _pulled >= 0 && !_placing;
     _gateButton.hidden = !gatefold;
     _customButton.hidden = _pulled < 0;
     UIButtonConfiguration *gate = _gateButton.configuration;
-    gate.title = _opened ? @"Close Gatefold" : @"Open Gatefold";
+    BOOL found = _pulled >= 0 && [self insideFound:_records[(NSUInteger)_pulled]];
+    gate.title = _opened ? (found ? @"Close Gatefold" : @"Close") : (found ? @"Open Gatefold" : @"About This Album");
+    gate.image = [UIImage systemImageNamed:found ? @"book" : @"info.circle"];
     _gateButton.configuration = gate;
     UIButtonConfiguration *custom = _customButton.configuration;
     custom.title = _placing ? @"Done" : nil;
@@ -1536,6 +1870,7 @@ static UIImage *fitted(UIImage *picture) {
 
 - (void)putBack {
     if (_pulled < 0) return;
+    if (_familiesWaiting) dispatch_async(dispatch_get_main_queue(), ^{ [self familiesChanged]; });
     if (_placing) [self finishPlacing];
     NSUInteger index = (NSUInteger)_pulled;
     CATransformLayer *layer = _layers[index];
@@ -1644,13 +1979,20 @@ static UIImage *fitted(UIImage *picture) {
     disc.bounds = CGRectMake(0, 0, side, side);
     disc.cornerRadius = side / 2;
     disc.masksToBounds = YES;
-    disc.backgroundColor = [UIColor colorWithWhite:0.06 alpha:1].CGColor;
+    // Pressed in its color: black, or a color, darker in the grooves and catching the light around the middle.
+    UIColor *pressed = [self vinylColorOf:record];
+    CGFloat hue = 0, saturation = 0, brightness = 0, alpha = 1;
+    [pressed getHue:&hue saturation:&saturation brightness:&brightness alpha:&alpha];
+    BOOL black = brightness < 0.12;
+    UIColor *base = black ? [UIColor colorWithWhite:0.06 alpha:1] : [UIColor colorWithHue:hue saturation:saturation brightness:MAX(0.2, brightness * 0.7) alpha:1];
+    disc.backgroundColor = base.CGColor;
     CAGradientLayer *sheen = [CAGradientLayer layer];
     sheen.type = kCAGradientLayerConic;
     sheen.frame = disc.bounds;
     sheen.startPoint = CGPointMake(0.5, 0.5);
     sheen.endPoint = CGPointMake(0.5, 0);
-    UIColor *dark = [UIColor colorWithWhite:0.05 alpha:1], *light = [UIColor colorWithWhite:0.22 alpha:1];
+    UIColor *dark = black ? [UIColor colorWithWhite:0.05 alpha:1] : [UIColor colorWithHue:hue saturation:saturation brightness:MAX(0.15, brightness * 0.55) alpha:1];
+    UIColor *light = black ? [UIColor colorWithWhite:0.22 alpha:1] : [UIColor colorWithHue:hue saturation:saturation * 0.8 brightness:MIN(1, brightness * 1.05 + 0.1) alpha:1];
     sheen.colors = @[(id)dark.CGColor, (id)light.CGColor, (id)dark.CGColor, (id)dark.CGColor, (id)light.CGColor, (id)dark.CGColor];
     sheen.locations = @[@0, @0.12, @0.25, @0.5, @0.62, @0.75];
     [disc addSublayer:sheen];
@@ -1819,6 +2161,9 @@ static UIImage *fitted(UIImage *picture) {
             [weakSelf customChanged:key];
         }]];
     }
+    [sheet addAction:[UIAlertAction actionWithTitle:@"Vinyl Color" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        [weakSelf askVinylFor:key];
+    }]];
     if (SGRHasCustom(key)) {
         [sheet addAction:[UIAlertAction actionWithTitle:found ? @"Use the Sleeve Found" : @"Use the Album's Cover" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
             SGRForgetCustom(key);
@@ -1863,6 +2208,83 @@ static UIImage *fitted(UIImage *picture) {
     [sheet addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
     sheet.popoverPresentationController.sourceView = _customButton;
     [self presentViewController:sheet animated:YES completion:nil];
+}
+
+// The color the record is pressed in: the page's default, black, the album's color, or one picked.
+- (void)askVinylFor:(NSString *)key {
+    UIAlertController *sheet = [UIAlertController alertControllerWithTitle:@"Vinyl Color" message:nil preferredStyle:UIAlertControllerStyleActionSheet];
+    __weak SGRRecordsPage *weakSelf = self;
+    NSString *now = SGRCustomVinyl(key);
+    NSString *fallback = SGInt(SGKeyRecordsVinylColor, 0) == 1 ? @"Album Color" : @"Black";
+    NSArray<NSArray *> *choices = @[@[[NSString stringWithFormat:@"Default (%@)", fallback], [NSNull null]], @[@"Black", @"black"], @[@"Album Color", @"cover"]];
+    for (NSArray *choice in choices) {
+        id value = choice[1] == [NSNull null] ? nil : choice[1];
+        BOOL current = value ? [value isEqual:now] : now == nil;
+        NSString *title = current ? [choice[0] stringByAppendingString:@"  ✓"] : choice[0];
+        [sheet addAction:[UIAlertAction actionWithTitle:title style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+            SGRSetCustomVinyl(key, value);
+            [weakSelf peekDisc];
+        }]];
+    }
+    [sheet addAction:[UIAlertAction actionWithTitle:@"Choose a Color…" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        SGRRecordsPage *page = weakSelf;
+        if (!page) return;
+        page->_pickingKey = key;
+        UIColorPickerViewController *picker = [UIColorPickerViewController new];
+        picker.supportsAlpha = NO;
+        picker.delegate = page;
+        NSString *hex = SGRCustomVinyl(key);
+        if ([hex hasPrefix:@"#"]) {
+            unsigned int rgb = 0;
+            [[NSScanner scannerWithString:[hex substringFromIndex:1]] scanHexInt:&rgb];
+            picker.selectedColor = [UIColor colorWithRed:((rgb >> 16) & 0xFF) / 255.0 green:((rgb >> 8) & 0xFF) / 255.0 blue:(rgb & 0xFF) / 255.0 alpha:1];
+        }
+        [page presentViewController:picker animated:YES completion:nil];
+    }]];
+    [sheet addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    sheet.popoverPresentationController.sourceView = _customButton;
+    [self presentViewController:sheet animated:YES completion:nil];
+}
+
+- (void)colorPickerViewControllerDidFinish:(UIColorPickerViewController *)picker {
+    NSString *key = _pickingKey;
+    _pickingKey = nil;
+    if (!key) return;
+    CGFloat r = 0, g = 0, b = 0, a = 1;
+    [picker.selectedColor getRed:&r green:&g blue:&b alpha:&a];
+    SGRSetCustomVinyl(key, [NSString stringWithFormat:@"#%02X%02X%02X", (int)lround(MIN(MAX(r, 0), 1) * 255),
+                            (int)lround(MIN(MAX(g, 0), 1) * 255), (int)lround(MIN(MAX(b, 0), 1) * 255)]);
+    [self peekDisc];
+}
+
+// The record slid a little way out of its sleeve and back, to show the color it is pressed in.
+- (void)peekDisc {
+    if (_pulled < 0 || _sliding) return;
+    NSUInteger index = (NSUInteger)_pulled;
+    CATransformLayer *layer = _layers[index];
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    [_disc removeFromSuperlayer];
+    _disc = [self discFor:_records[index]];
+    _disc.position = CGPointMake(_width / 2, _width / 2);
+    _disc.zPosition = -kSpine / 2;
+    _opening.hidden = YES;
+    [layer addSublayer:_disc];
+    [CATransaction commit];
+    CAKeyframeAnimation *peek = [CAKeyframeAnimation animationWithKeyPath:@"position.x"];
+    peek.values = @[@(_width / 2), @(_width * 0.95), @(_width * 0.95), @(_width / 2)];
+    peek.keyTimes = @[@0, @0.3, @0.7, @1];
+    peek.duration = 1.6;
+    peek.timingFunctions = @[[CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseOut], [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionLinear],
+                             [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseIn]];
+    __weak SGRRecordsPage *weakSelf = self;
+    [CATransaction begin];
+    [CATransaction setCompletionBlock:^{
+        SGRRecordsPage *page = weakSelf;
+        if (page && !page->_sliding) [page tuckDiscIn];
+    }];
+    [_disc addAnimation:peek forKey:@"peek"];
+    [CATransaction commit];
 }
 
 // A picture picked: kept, made smaller first, for the part it was picked for.
@@ -1964,15 +2386,19 @@ static UIImage *fitted(UIImage *picture) {
     [self render];
 }
 
+- (void)scrollViewDidEndDecelerating:(UIScrollView *)scroll {
+    if (_familiesWaiting) [self familiesChanged];
+}
+
 - (void)scrollViewWillBeginDragging:(UIScrollView *)scroll {
     [_tick prepare];
 }
 
 // Every scroll settles with a record on the focus.
 - (void)scrollViewWillEndDragging:(UIScrollView *)scroll withVelocity:(CGPoint)velocity targetContentOffset:(inout CGPoint *)target {
-    if (!_records.count) return;
+    if (!_shownCount) return;
     CGFloat top = scroll.adjustedContentInset.top, step = [self step];
-    CGFloat index = MIN(MAX(round((target->y + top) / step), 0), (CGFloat)(_records.count - 1));
+    CGFloat index = MIN(MAX(round((target->y + top) / step), 0), (CGFloat)(_shownCount - 1));
     target->y = index * step - top;
 }
 
@@ -2037,6 +2463,10 @@ static UIImage *fitted(UIImage *picture) {
     NSUInteger count = _records.count;
     if (!count || _layers.count != count) return;
     CGPoint point = [tap locationInView:_stage];
+    if (_search.isFirstResponder) {
+        [_search resignFirstResponder];
+        return;
+    }
     if (_pulled >= 0) {
         BOOL onRecord = CGRectContainsPoint(CGRectInset([self pulledFrame], -8, -8), point);
         if (!_customButton.hidden && CGRectContainsPoint(CGRectInset(_customButton.frame, -8, -8), point)) {
@@ -2063,7 +2493,7 @@ static UIImage *fitted(UIImage *picture) {
     }
     // The lower records lie over the ones above them.
     for (NSInteger i = (NSInteger)count - 1; i >= 0; i--) {
-        if (_layers[(NSUInteger)i].hidden || i == _returning) continue;
+        if (_layers[(NSUInteger)i].hidden || i == _returning || [self rankOf:(NSUInteger)i] < 0) continue;
         CGFloat x = point.x - middle, y = point.y - [self bottomOf:(NSUInteger)i focus:focus];
         if (x >= minX && x <= maxX && y >= minY && y <= maxY) {
             [self pullOut:(NSUInteger)i];

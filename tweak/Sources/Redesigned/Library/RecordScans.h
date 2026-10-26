@@ -59,6 +59,23 @@ SGRSleeve *SGRSleeveOfArtwork(NSDictionary<NSString *, NSArray<NSString *> *> *a
 // A spine photographed standing turned to lie along the record's edge, its writing reading left to right. Any thread.
 UIImage *SGRLyingSpine(UIImage *spine);
 
+// The cover's most vivid color of those it has a fair amount of, for a record pressed in the album's color: its colors
+// weighed by how much of the cover each takes and how strong it is. Black for a cover with no color. Any thread.
+UIColor *SGRProminentColor(UIImage *cover);
+
+// The people in each artist, to keep an artist's side projects with them (RecordsPage.m's Artist order): a band's
+// members, past ones too, or a person themself, from MusicBrainz (its artist search, then the artist's band
+// relations), kept in Caches. `artists` not known yet are looked up one at a time behind the sleeves' lookups'
+// rate; SGRArtistFamiliesDidChangeNotification is posted on main after each few, and when the last is in.
+extern NSNotificationName const SGRArtistFamiliesDidChangeNotification;
+void SGRLookUpArtists(NSArray<NSString *> *artists);
+// MusicBrainz's ids of the people in `artist`; nil while not known, empty when it was not found.
+NSSet<NSString *> *SGRArtistPeople(NSString *artist);
+
+// A short description of the album from Wikipedia (its search, then the page's summary), when a page of that title
+// names the artist; `done` on main with it, or nil. Kept in Caches, misses for a month.
+void SGRAlbumAbout(NSString *title, NSString *artist, void (^done)(NSString *about));
+
 // The colors a label strip in the cover's colors takes: the cover's most common color, and of the cover's other
 // colors the one that reads best on it, else white or black. Any thread.
 void SGRSpineColors(UIImage *cover, UIColor **back, UIColor **text);
