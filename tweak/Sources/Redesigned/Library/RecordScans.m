@@ -343,7 +343,7 @@ void SGRSpineColors(UIImage *cover, UIColor **back, UIColor **text) {
     enum { kSide = 32, kBuckets = 4096 };
     uint8_t pixels[kSide * kSide * 4];
     CGColorSpaceRef space = CGColorSpaceCreateDeviceRGB();
-    CGContextRef context = CGBitmapContextCreate(pixels, kSide, kSide, 8, kSide * 4, space, kCGImageAlphaNoneSkipLast);
+    CGContextRef context = CGBitmapContextCreate(pixels, kSide, kSide, 8, kSide * 4, space, (CGBitmapInfo)kCGImageAlphaNoneSkipLast);
     CGColorSpaceRelease(space);
     if (!context) return;
     CGContextSetInterpolationQuality(context, kCGInterpolationMedium);
