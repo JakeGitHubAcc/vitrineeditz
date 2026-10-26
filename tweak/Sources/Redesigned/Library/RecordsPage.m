@@ -538,16 +538,58 @@ static UIImage *fitted(UIImage *picture) {
         [weakSelf updateMenu];
         [weakSelf redrawSleeves];
     }];
-    scans.subtitle = @"The real sleeves, from the Cover Art Archive";
+    scans.subtitle = @"The real sleeves, from the Cover Art Archive and Discogs";
     scans.state = [self scans] ? UIMenuElementStateOn : UIMenuElementStateOff;
+    BOOL hasToken = [NSUserDefaults.standardUserDefaults stringForKey:SGKeyDiscogsToken].length > 0;
+    UIAction *discogs = [UIAction actionWithTitle:@"Discogs Token" image:[UIImage systemImageNamed:@"key"] identifier:nil handler:^(UIAction *action) {
+        [weakSelf askDiscogsToken];
+    }];
+    discogs.subtitle = hasToken ? @"Set: Discogs is asked too" : @"Add yours to look on Discogs too";
     UIMenu *menu = [UIMenu menuWithChildren:@[
         choices(@"Sort By", SGKeyRecordsSort, @[@"Recently Added", @"Title", @"Artist"], [self sort]),
         choices(@"Show", SGKeyRecordsShow, @[@"All Albums", @"Spotify", @"Local Albums"], [self show]),
-        [UIMenu menuWithTitle:@"" image:nil identifier:nil options:UIMenuOptionsDisplayInline children:@[scans]],
+        [UIMenu menuWithTitle:@"" image:nil identifier:nil options:UIMenuOptionsDisplayInline children:@[scans, discogs]],
     ]];
     UIBarButtonItem *item = [[UIBarButtonItem alloc] initWithImage:[UIImage systemImageNamed:@"line.3.horizontal.decrease"] menu:menu];
     item.accessibilityLabel = @"Sort and Filter";
     self.navigationItem.rightBarButtonItem = item;
+}
+
+// The user's Discogs token, which Discogs's database asks of any program: made at discogs.com > Settings >
+// Developers > Generate new token. Kept on the phone only. Setting it looks again for every sleeve not found.
+- (void)askDiscogsToken {
+    UIAlertController *ask = [UIAlertController alertControllerWithTitle:@"Discogs Token"
+        message:@"Discogs answers only signed-in apps. Make a personal access token at discogs.com, Settings, Developers, Generate new token, and paste it here. It stays on this phone."
+        preferredStyle:UIAlertControllerStyleAlert];
+    NSString *now = [NSUserDefaults.standardUserDefaults stringForKey:SGKeyDiscogsToken];
+    [ask addTextFieldWithConfigurationHandler:^(UITextField *field) {
+        field.placeholder = @"Token";
+        field.text = now;
+        field.autocorrectionType = UITextAutocorrectionTypeNo;
+        field.autocapitalizationType = UITextAutocapitalizationTypeNone;
+        field.secureTextEntry = YES;
+    }];
+    __weak SGRRecordsPage *weakSelf = self;
+    __weak UIAlertController *weakAsk = ask;
+    void (^keep)(NSString *) = ^(NSString *token) {
+        token = [token stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+        if (token.length) [NSUserDefaults.standardUserDefaults setObject:token forKey:SGKeyDiscogsToken];
+        else [NSUserDefaults.standardUserDefaults removeObjectForKey:SGKeyDiscogsToken];
+        SGRRecordScansForgetMissing();
+        SGRRecordsPage *page = weakSelf;
+        if (!page) return;
+        [page->_lookedAgain removeAllObjects];
+        [page updateMenu];
+        [page redrawSleeves];
+    };
+    [ask addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    if (now.length) {
+        [ask addAction:[UIAlertAction actionWithTitle:@"Remove" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) { keep(nil); }]];
+    }
+    [ask addAction:[UIAlertAction actionWithTitle:@"Save" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        keep(weakAsk.textFields.firstObject.text ?: @"");
+    }]];
+    [self presentViewController:ask animated:YES completion:nil];
 }
 
 - (void)readSaved {
