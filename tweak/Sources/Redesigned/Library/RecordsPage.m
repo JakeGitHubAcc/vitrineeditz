@@ -414,26 +414,35 @@ static UIImage *fitted(UIImage *picture) {
     _stage = [[UIView alloc] initWithFrame:back.bounds];
     _stage.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     [back addSubview:_stage];
-    // Over the crate while a record is out of it, under that record.
+    // Over the crate while a record is out of it, under that record: flat, on a view of its own, so no record's
+    // panels cut through it.
+    UIView *dimView = [[UIView alloc] initWithFrame:back.bounds];
+    dimView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    dimView.userInteractionEnabled = NO;
+    [back addSubview:dimView];
     _dim = [CALayer layer];
     _dim.backgroundColor = UIColor.blackColor.CGColor;
     _dim.opacity = 0;
-    _dim.zPosition = 999;
-    [_stage.layer addSublayer:_dim];
+    [dimView.layer addSublayer:_dim];
     // The record out of the crate is lifted onto a layer of its own over the crate and its dim: in the crate's own
     // layer its panels, hung in 3D from it, were drawn under the dim (the gatefold's inside came out darkened).
-    _lifted = [[UIView alloc] initWithFrame:back.bounds];
-    _lifted.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    _lifted.userInteractionEnabled = NO;
-    [back addSubview:_lifted];
-    // Behind the record out of the crate.
+    // Its shadow is a flat layer of its own under it: beside the record its panels, in 3D, cut through the shadow
+    // wherever they lean behind it (the front came out half dark, split on a slant).
+    UIView *floorView = [[UIView alloc] initWithFrame:back.bounds];
+    floorView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    floorView.userInteractionEnabled = NO;
+    [back addSubview:floorView];
     _floor = [CALayer layer];
-    _floor.zPosition = -1;
+    _floor.frame = floorView.bounds;
     _floor.shadowColor = UIColor.blackColor.CGColor;
     _floor.shadowOpacity = 0;
     _floor.shadowRadius = 22;
     _floor.shadowOffset = CGSizeMake(0, 18);
-    [_lifted.layer addSublayer:_floor];
+    [floorView.layer addSublayer:_floor];
+    _lifted = [[UIView alloc] initWithFrame:back.bounds];
+    _lifted.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    _lifted.userInteractionEnabled = NO;
+    [back addSubview:_lifted];
     _note = [UILabel new];
     _note.textColor = [UIColor colorWithWhite:1 alpha:0.6];
     _note.font = [UIFont systemFontOfSize:15];
