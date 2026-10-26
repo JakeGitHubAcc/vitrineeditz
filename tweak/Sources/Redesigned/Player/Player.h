@@ -47,8 +47,9 @@ typedef NS_ENUM(NSInteger, SGRPlayerBackgroundKind) {
     SGRPlayerBackgroundFluid,      // the artwork itself blurred and turning (SGRFluid.h)
     SGRPlayerBackgroundAnimated,   // the track's Canvas or Apple Music's animated cover, over Fluid (PlayerMotion.x)
     SGRPlayerBackgroundVisualiser, // a spectrum of the song over Fluid held still (PlayerVisualiser.m)
+    SGRPlayerBackgroundMosaic,     // a wall of dots lit by the song around the cover, its animated one where it has one
 };
-// The player's ⋯ menu switches between the last three, which share the Fluid field, without a restart.
+// The player's ⋯ menu switches between the last four, which share the Fluid field, without a restart.
 SGRPlayerBackgroundKind SGRPlayerBackground(void);
 // The names of the choices, in order.
 NSArray<NSString *> *SGRPlayerBackgroundNames(void);
@@ -165,6 +166,27 @@ UIView *SGRPlayerMotionPreview(void (^arrived)(void));
 CGFloat SGRPlayerClipDim(CGFloat luminance, BOOL contrast, BOOL lyrics);
 
 #pragma mark - the Visualizer (PlayerVisualiser.m)
+
+// Mosaic's dots: how many stand across the screen, and each light's share of its cell, in percent.
+#define SGRKeyMosaicDots @"spotifyglass.redesign.player.mosaic.dots"
+#define SGRKeyMosaicSize @"spotifyglass.redesign.player.mosaic.size"
+enum { SGRMosaicDotsLeast = 12, SGRMosaicDotsMost = 64, SGRMosaicDotsDefault = 30 };
+enum { SGRMosaicSizeLeast = 30, SGRMosaicSizeMost = 100, SGRMosaicSizeDefault = 78 };
+NSInteger SGRMosaicDots(void);
+NSInteger SGRMosaicSize(void);
+// A soft shadow under the player's text and buttons while Mosaic is behind them, so a lit dot never washes
+// them out (PlayerTextShadow.x). On until switched off.
+#define SGRKeyMosaicTextShadow @"spotifyglass.redesign.player.mosaic.textShadow"
+// The shadows put on or taken off again, for a change of background or of the switch.
+void SGRPlayerTextShadowsChanged(void);
+// The animated cover Mosaic plays over the cover's square, from PlayerMotion.x; nil takes it off.
+void SGRPlayerMosaicSetClip(NSURL *file, UIImage *poster);
+// Mosaic is on the field with an animated cover playing in the square, which Spotify's cover makes room for.
+BOOL SGRPlayerMosaicClipShowing(void);
+// The cover laid out again: Mosaic's clip goes where it is now.
+void SGRPlayerMosaicCoverMoved(void);
+// The playing track's animated cover looked up again, for the background's change (PlayerMotion.x).
+void SGRPlayerMotionRestart(void);
 
 // The background is the Visualizer.
 BOOL SGRPlayerVisualiserShowing(void);

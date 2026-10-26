@@ -26,6 +26,7 @@
 // so later. Music Haptics schedules for the output latency; do the same here if the beat looks early on AirPods.
 //
 // Threading: main thread only, but for the reader, which runs on the render thread.
+#import <AVFoundation/AVFoundation.h>
 #import "Core/SGCore.h"
 #import "Redesigned/Kit/SGRKit.h"
 #import "Shared/AudioEffects/AudioEffects.h"
@@ -71,6 +72,26 @@ static const float kSettled = 0.02f;
 // Each band shares this much with either neighbor, three times over, so one loud band is a hill and not a spike.
 static const float kSpread = 0.25f;
 static const NSTimeInterval kTransitionSlack = 0.05;
+// Mosaic: the wall's black over the field; the bars' longest reach, a share of the view's longer side; how bright
+// an unlit dot glows, and how much the kick adds to that; how bright a falling bar's trail is.
+static const CGFloat kWallDark = 0.92, kReach = 0.5;
+static const float kUnlit = 0.12f, kUnlitPulse = 0.08f, kTrail = 0.35f;
+// The animated cover's corners, a share of its side, as Spotify rounds its square.
+static const CGFloat kClipCorner = 0.025;
+
+NSInteger SGRMosaicDots(void) {
+    NSInteger dots = SGInt(SGRKeyMosaicDots, SGRMosaicDotsDefault);
+    return MIN(MAX(dots, SGRMosaicDotsLeast), SGRMosaicDotsMost);
+}
+
+NSInteger SGRMosaicSize(void) {
+    NSInteger size = SGInt(SGRKeyMosaicSize, SGRMosaicSizeDefault);
+    return MIN(MAX(size, SGRMosaicSizeLeast), SGRMosaicSizeMost);
+}
+
+// The animated cover Mosaic plays in the cover's square, nil for none (PlayerMotion.x hands it over).
+static NSURL *sg_clipFile;
+static UIImage *sg_clipPoster;
 
 static NSUInteger sg_readers;
 
@@ -102,7 +123,13 @@ static NSDictionary *noActions(void) {
 // The height the hills are a share of; 0 is the bounds' height.
 @property (nonatomic) CGFloat screenHeight;
 @property (nonatomic, readonly) BOOL blurred;
+// Mosaic's wall of dots in place of the hills.
+@property (nonatomic) BOOL mosaic;
+// Mosaic's bars stand out of the player's cover; elsewhere (the Player page's card) out of a square in the middle.
+@property (nonatomic) BOOL followsCover;
 - (void)setBlurred:(BOOL)blurred animated:(BOOL)animated;
+- (void)playClip:(NSURL *)file poster:(UIImage *)poster;
+- (void)placeClip;
 - (void)appear:(BOOL)animated;
 - (void)disappear:(void (^)(void))done;
 @end
@@ -122,6 +149,23 @@ static NSDictionary *noActions(void) {
     // What draw last drew from: the same again sets the same paths and opacity, so a hill at rest hands the render
     // server nothing. The pulse is kept as the opacity it rounds to, since it decays on long after that stands still.
     struct { CGRect bounds; CGFloat baseline, screenHeight; float front[kBands], back[kBands], opacity; } _drawn;
+    // Mosaic: a dark wall of dots over the field, each the cover's color where it stands, lit in bars out of the
+    // cover's edges. _dots holds one pixel a dot and is masked into round lights by _holes.
+    BOOL _mosaic;
+    UIView *_wall;
+    CALayer *_dots, *_holes;
+    UIImage *_artwork;
+    int _columns, _rows;
+    CGFloat _pitch, _light;   // a dot's cell in points, and the light's share of it, as the settings say
+    // The animated cover over the cover's square, the poster under the video until it draws.
+    CALayer *_clipStill;
+    AVPlayerLayer *_clipLayer;
+    AVQueuePlayer *_clipPlayer;
+    AVPlayerLooper *_clipLooper;
+    NSURL *_clipFile;
+    float *_samples;   // the cover's color under each dot, brought to full brightness, RGB a dot
+    uint8_t *_pixels;
+    struct { CGRect bounds, cover; float front[kBands], back[kBands], pulse; } _lit;
 }
 
 // As PlayerMotion.x: what fades is the effect view's effect, never its alpha or an ancestor's.
@@ -197,6 +241,8 @@ static UIColor *lit(UIColor *color, CGFloat luminance) {
     [NSNotificationCenter.defaultCenter removeObserver:self];
     [_link invalidate];
     if (_reading) needReader(NO);
+    free(_samples);
+    free(_pixels);
 }
 
 #pragma mark - color
@@ -212,6 +258,8 @@ static UIColor *lit(UIColor *color, CGFloat luminance) {
 - (void)artworkChanged {
     UIImage *image = SGRNowPlayingArtwork(NULL, NULL);
     if (!image) return;
+    _artwork = image;
+    [self sampleArtwork];
     NSUInteger generation = ++_palette;
     SGRPaletteRequest request = {CGSizeZero, NO, YES, YES, NO};
     __weak SGRVisualiserView *weakSelf = self;
@@ -254,18 +302,21 @@ static UIColor *lit(UIColor *color, CGFloat luminance) {
     _backShape.frame = bounds;
     _frontShape.frame = bounds;
     _crestFade.frame = bounds;
+    if (_mosaic) [self layOutWall];
     [self draw];
 }
 
 - (void)appear:(BOOL)animated {
     _content.alpha = 0;
-    if (animated) SGRAnimate(SGRMotionFade, ^{ self->_content.alpha = 1; }, nil);
-    else _content.alpha = 1;
+    _wall.alpha = 0;
+    if (animated) SGRAnimate(SGRMotionFade, ^{ self->_content.alpha = 1; self->_wall.alpha = 1; }, nil);
+    else _content.alpha = _wall.alpha = 1;
 }
 
 - (void)disappear:(void (^)(void))done {
     SGRAnimate(SGRMotionFade, ^{
         self->_content.alpha = 0;
+        self->_wall.alpha = 0;
         self->_lyricsBlur.effect = nil;
     }, ^(BOOL finished) { done(); });
 }
@@ -317,6 +368,9 @@ static UIColor *lit(UIColor *color, CGFloat luminance) {
     BOOL playing = !SGPlayerState().isPaused;
     [self setMoving:may && (playing || !self.settled)];
     [self setReading:may && playing];
+    // The animated cover holds still with the rest, on its frame, as Animated's clip does (PlayerMotion.x).
+    if (may && playing && !SGRReduceMotion()) [_clipPlayer play];
+    else [_clipPlayer pause];
 }
 
 - (void)setReading:(BOOL)reading {
@@ -436,6 +490,10 @@ static void shape(CAShapeLayer *layer, const float *bands, CGFloat width, CGFloa
 - (void)draw {
     CGRect bounds = self.bounds;
     if (bounds.size.width <= 0 || bounds.size.height <= 0) return;
+    if (_mosaic) {
+        [self drawWall];
+        return;
+    }
     float opacity = kPulseFloor + (1 - kPulseFloor) * _pulse;
     if (CGRectEqualToRect(bounds, _drawn.bounds) && _baseline == _drawn.baseline && _screenHeight == _drawn.screenHeight
         && opacity == _drawn.opacity && !memcmp(_front, _drawn.front, sizeof _front) && !memcmp(_back, _drawn.back, sizeof _back)) return;
@@ -458,6 +516,247 @@ static void shape(CAShapeLayer *layer, const float *bands, CGFloat width, CGFloa
     [CATransaction commit];
 }
 
+#pragma mark - Mosaic
+
+- (void)setMosaic:(BOOL)mosaic {
+    if (mosaic == _mosaic) return;
+    _mosaic = mosaic;
+    _content.hidden = mosaic;
+    if (mosaic) {
+        _wall = [[UIView alloc] initWithFrame:self.bounds];
+        _wall.backgroundColor = [UIColor colorWithWhite:0 alpha:kWallDark];
+        _wall.alpha = _content.alpha;
+        _dots = [CALayer layer];
+        _dots.actions = noActions();
+        _dots.magnificationFilter = kCAFilterNearest;
+        _holes = [CALayer layer];
+        _holes.actions = noActions();
+        _dots.mask = _holes;
+        [_wall.layer addSublayer:_dots];
+        _clipStill = [CALayer layer];
+        _clipStill.actions = noActions();
+        _clipStill.contentsGravity = kCAGravityResizeAspectFill;
+        _clipStill.masksToBounds = YES;
+        _clipStill.cornerCurve = kCACornerCurveContinuous;
+        _clipStill.hidden = YES;
+        _clipLayer = [AVPlayerLayer layer];
+        _clipLayer.actions = noActions();
+        _clipLayer.videoGravity = AVLayerVideoGravityResizeAspectFill;
+        [_clipStill addSublayer:_clipLayer];
+        [_wall.layer addSublayer:_clipStill];
+        [self insertSubview:_wall belowSubview:_lyricsBlur];
+        _columns = _rows = 0;
+        _pitch = _light = 0;
+        memset(&_lit, 0, sizeof _lit);
+        [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(wallSettingsChanged) name:NSUserDefaultsDidChangeNotification object:nil];
+    } else {
+        [NSNotificationCenter.defaultCenter removeObserver:self name:NSUserDefaultsDidChangeNotification object:nil];
+        [self playClip:nil poster:nil];
+        [_wall removeFromSuperview];
+        _wall = nil;
+        _dots = _holes = _clipStill = nil;
+        _clipLayer = nil;
+        memset(&_drawn, 0, sizeof _drawn);
+    }
+    [self setNeedsLayout];
+}
+
+// The defaults change on any thread; the dots are laid out again on main when theirs did.
+- (void)wallSettingsChanged {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (!self->_mosaic) return;
+        CGFloat pitch = [self wantedPitch], light = SGRMosaicSize() / 100.0;
+        if (pitch != self->_pitch || light != self->_light) [self setNeedsLayout];
+    });
+}
+
+// Whole points, so the mask's pattern and the dots' pixels stay in step across the wall.
+- (CGFloat)wantedPitch {
+    CGFloat width = self.window.bounds.size.width ?: self.bounds.size.width;
+    return MAX(4, floor(width / SGRMosaicDots()));
+}
+
+// One dot of the wall's mask: a round light, `light` of its cell of `pitch` points.
+static UIImage *lightImage(CGFloat pitch, CGFloat light) {
+    UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:CGSizeMake(pitch, pitch)];
+    return [renderer imageWithActions:^(UIGraphicsImageRendererContext *context) {
+        CGFloat inset = pitch * (1 - light) / 2;
+        [UIColor.whiteColor setFill];
+        if (light >= 1) UIRectFill(CGRectMake(0, 0, pitch, pitch));
+        else [[UIBezierPath bezierPathWithOvalInRect:CGRectMake(inset, inset, pitch - 2 * inset, pitch - 2 * inset)] fill];
+    }];
+}
+
+#pragma mark - the animated cover
+
+// Plays `file` in the cover's square, looping and muted, its poster there until the video draws; nil takes it off.
+- (void)playClip:(NSURL *)file poster:(UIImage *)poster {
+    if ((file == _clipFile || [file isEqual:_clipFile]) && (file || !_clipPlayer)) return;
+    [_clipPlayer pause];
+    _clipLayer.player = nil;
+    _clipPlayer = nil;
+    _clipLooper = nil;
+    _clipFile = file;
+    if (!file || !_clipStill) {
+        _clipStill.hidden = YES;
+        _clipStill.contents = nil;
+        return;
+    }
+    _clipStill.contents = (__bridge id)poster.CGImage;
+    _clipPlayer = [AVQueuePlayer new];
+    _clipPlayer.muted = YES;
+    _clipPlayer.preventsDisplaySleepDuringVideoPlayback = NO;
+    _clipLooper = [AVPlayerLooper playerLooperWithPlayer:_clipPlayer templateItem:[AVPlayerItem playerItemWithURL:file]];
+    _clipLayer.player = _clipPlayer;
+    _clipStill.hidden = NO;
+    [self placeClip];
+    [self updateMotion];
+}
+
+// Over the cover's square, as large and as round as it is drawn now.
+- (void)placeClip {
+    if (!_clipStill || _clipStill.hidden) return;
+    CGRect cover = [self coverRect];
+    if (CGRectEqualToRect(cover, _clipStill.frame)) return;
+    _clipStill.frame = cover;
+    _clipStill.cornerRadius = round(cover.size.width * kClipCorner);
+    _clipLayer.frame = _clipStill.bounds;
+}
+
+// A dot a cell of the settings' size, as many as cover the bounds, the grid centered across.
+- (void)layOutWall {
+    CGRect bounds = self.bounds;
+    _wall.frame = bounds;
+    CGFloat pitch = [self wantedPitch], light = SGRMosaicSize() / 100.0;
+    if (pitch != _pitch || light != _light) {
+        _pitch = pitch;
+        _light = light;
+        _holes.backgroundColor = [UIColor colorWithPatternImage:lightImage(pitch, light)].CGColor;
+        _columns = _rows = 0;
+    }
+    int columns = (int)ceil(bounds.size.width / pitch), rows = (int)ceil(bounds.size.height / pitch);
+    CGRect frame = CGRectMake(floor((bounds.size.width - columns * pitch) / 2), 0, columns * pitch, rows * pitch);
+    _dots.frame = frame;
+    _holes.frame = (CGRect){CGPointZero, frame.size};
+    [self placeClip];
+    if (columns == _columns && rows == _rows) return;
+    _columns = columns;
+    _rows = rows;
+    free(_samples);
+    free(_pixels);
+    _samples = calloc((size_t)MAX(columns * rows, 1) * 3, sizeof(float));
+    _pixels = calloc((size_t)MAX(columns * rows, 1) * 4, 1);
+    memset(&_lit, 0, sizeof _lit);
+    [self sampleArtwork];
+}
+
+// The cover stretched over the grid, a pixel a dot, each brought to full brightness: a light shows its color
+// lit, and a dark part of the cover still lights in its own hue. Near-black and gray come out a soft white.
+- (void)sampleArtwork {
+    if (!_samples || !_artwork.CGImage) return;
+    int columns = _columns, rows = _rows;
+    uint8_t *rgba = calloc((size_t)columns * rows * 4, 1);
+    CGColorSpaceRef space = CGColorSpaceCreateDeviceRGB();
+    CGContextRef context = CGBitmapContextCreate(rgba, columns, rows, 8, columns * 4, space, (CGBitmapInfo)kCGImageAlphaNoneSkipLast);
+    CGColorSpaceRelease(space);
+    if (context) {
+        CGContextSetInterpolationQuality(context, kCGInterpolationMedium);
+        CGContextDrawImage(context, CGRectMake(0, 0, columns, rows), _artwork.CGImage);
+        CGContextRelease(context);
+    }
+    for (int i = 0; i < columns * rows; i++) {
+        float r = rgba[i * 4] / 255.0f, g = rgba[i * 4 + 1] / 255.0f, b = rgba[i * 4 + 2] / 255.0f;
+        float most = fmaxf(r, fmaxf(g, b)), least = fminf(r, fminf(g, b));
+        if (most < 0.06f || most - least < 0.04f) {
+            r = g = b = 0.8f;
+        } else {
+            // Full brightness, the saturation lifted a little so a pale cover's lights still have a hue.
+            r /= most; g /= most; b /= most;
+            float low = fminf(r, fminf(g, b)), lift = fminf(1, 1.25f * (1 - low)) / fmaxf(1 - low, 0.001f);
+            r = 1 - (1 - r) * lift; g = 1 - (1 - g) * lift; b = 1 - (1 - b) * lift;
+        }
+        _samples[i * 3] = r;
+        _samples[i * 3 + 1] = g;
+        _samples[i * 3 + 2] = b;
+    }
+    free(rgba);
+    memset(&_lit, 0, sizeof _lit);
+    [self draw];
+}
+
+// Where the bars stand out of, in the view's coordinates.
+- (CGRect)coverRect {
+    CGRect bounds = self.bounds;
+    if (_followsCover) {
+        CGRect cover = SGRPlayerCoverFrameIn(self);
+        if (!CGRectIsNull(cover) && cover.size.width > 0) return cover;
+    }
+    CGFloat side = round(MIN(bounds.size.width, bounds.size.height) * 0.42);
+    return CGRectMake(round((bounds.size.width - side) / 2), round((bounds.size.height - side) / 2.6), side, side);
+}
+
+// Each dot outside the cover belongs to a band by its direction from the cover's middle, the bass straight out
+// of the sides and the treble out of the top and foot, mirrored all four ways, and lights while the band's bar
+// reaches it: how far it stands from the cover's nearest edge, in dots. The slower `back` levels leave a dimmer
+// trail behind a falling bar. Unlit, a dot glows faintly in its color; the kick lifts the whole wall a little.
+- (void)drawWall {
+    CGRect bounds = self.bounds, cover = [self coverRect];
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    [self placeClip];
+    [CATransaction commit];
+    if (!_pixels || !_columns) return;
+    if (CGRectEqualToRect(bounds, _lit.bounds) && CGRectEqualToRect(cover, _lit.cover) && _pulse == _lit.pulse
+        && !memcmp(_front, _lit.front, sizeof _front) && !memcmp(_back, _lit.back, sizeof _back)) return;
+    _lit.bounds = bounds;
+    _lit.cover = cover;
+    _lit.pulse = _pulse;
+    memcpy(_lit.front, _front, sizeof _front);
+    memcpy(_lit.back, _back, sizeof _back);
+
+    CGFloat originX = _dots.frame.origin.x, reach = MAX(bounds.size.width, bounds.size.height) * kReach / _pitch;
+    CGFloat midX = CGRectGetMidX(cover), midY = CGRectGetMidY(cover);
+    CGFloat halfW = MAX(cover.size.width / 2, 1), halfH = MAX(cover.size.height / 2, 1);
+    float glow = kUnlit + kUnlitPulse * _pulse;
+    for (int row = 0; row < _rows; row++) {
+        CGFloat y = (row + 0.5) * _pitch;
+        for (int column = 0; column < _columns; column++) {
+            CGFloat x = originX + (column + 0.5) * _pitch;
+            CGFloat outX = MAX(MAX(CGRectGetMinX(cover) - x, x - CGRectGetMaxX(cover)), 0);
+            CGFloat outY = MAX(MAX(CGRectGetMinY(cover) - y, y - CGRectGetMaxY(cover)), 0);
+            int i = row * _columns + column;
+            float level = 0;
+            if (outX > 0 || outY > 0) {
+                double angle = atan2(fabs(y - midY) / halfH, fabs(x - midX) / halfW) / M_PI_2;
+                int band = kFirst + (int)lround(angle * (kShown - 1));
+                float distance = (float)(MAX(outX, outY) / _pitch);
+                float front = powf(_front[band], 1.2f) * (float)reach, back = powf(_back[band], 1.2f) * (float)reach;
+                float lit = fminf(1, fmaxf(0, front - distance + 0.5f));
+                float trail = kTrail * fminf(1, fmaxf(0, back - distance + 0.5f));
+                level = fmaxf(lit, trail);
+            }
+            float brightness = glow + (1 - glow) * level;
+            const float *color = _samples + i * 3;
+            uint8_t *pixel = _pixels + i * 4;
+            pixel[0] = (uint8_t)lroundf(255 * color[0] * brightness);
+            pixel[1] = (uint8_t)lroundf(255 * color[1] * brightness);
+            pixel[2] = (uint8_t)lroundf(255 * color[2] * brightness);
+            pixel[3] = 255;
+        }
+    }
+    CGColorSpaceRef space = CGColorSpaceCreateDeviceRGB();
+    CGContextRef context = CGBitmapContextCreate(_pixels, _columns, _rows, 8, _columns * 4, space, (CGBitmapInfo)kCGImageAlphaNoneSkipLast);
+    CGColorSpaceRelease(space);
+    if (!context) return;
+    CGImageRef image = CGBitmapContextCreateImage(context);
+    CGContextRelease(context);
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    _dots.contents = (__bridge id)image;
+    [CATransaction commit];
+    CGImageRelease(image);
+}
+
 @end
 
 #pragma mark - in the player
@@ -465,11 +764,31 @@ static void shape(CAShapeLayer *layer, const float *bands, CGFloat width, CGFloa
 static SGRVisualiserView *sg_view;
 
 BOOL SGRPlayerVisualiserShowing(void) {
-    return SGRPlayerBackground() == SGRPlayerBackgroundVisualiser;
+    SGRPlayerBackgroundKind kind = SGRPlayerBackground();
+    return kind == SGRPlayerBackgroundVisualiser || kind == SGRPlayerBackgroundMosaic;
 }
 
 UIView *SGRPlayerVisualiserPreview(void) {
-    return [[SGRVisualiserView alloc] initWithFrame:CGRectZero];
+    SGRVisualiserView *preview = [[SGRVisualiserView alloc] initWithFrame:CGRectZero];
+    preview.mosaic = SGRPlayerBackground() == SGRPlayerBackgroundMosaic;
+    return preview;
+}
+
+void SGRPlayerMosaicSetClip(NSURL *file, UIImage *poster) {
+    sg_clipFile = file;
+    sg_clipPoster = poster;
+    [sg_view playClip:file poster:poster];
+}
+
+BOOL SGRPlayerMosaicClipShowing(void) {
+    return sg_clipFile != nil && sg_view.mosaic;
+}
+
+void SGRPlayerMosaicCoverMoved(void) {
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    [sg_view placeClip];
+    [CATransaction commit];
 }
 
 // The hills from the top of the field to the foot of its bleed, standing on the screen's foot.
@@ -492,12 +811,22 @@ void SGRPlayerVisualiserUpdate(void) {
     if (!wanted) {
         SGRVisualiserView *old = sg_view;
         sg_view = nil;
+        if (old.mosaic) SGRPlayerTextShadowsChanged();
         if (old.window) [old disappear:^{ [old removeFromSuperview]; }];
         else [old removeFromSuperview];
         return;
     }
     BOOL made = !sg_view;
-    if (made) sg_view = [[SGRVisualiserView alloc] initWithFrame:CGRectZero];
+    if (made) {
+        sg_view = [[SGRVisualiserView alloc] initWithFrame:CGRectZero];
+        sg_view.followsCover = YES;
+    }
+    BOOL mosaic = SGRPlayerBackground() == SGRPlayerBackgroundMosaic;
+    if (sg_view.mosaic != mosaic) {
+        sg_view.mosaic = mosaic;
+        if (mosaic) [sg_view playClip:sg_clipFile poster:sg_clipPoster];
+        SGRPlayerTextShadowsChanged();
+    }
     layOut(field);
     if (made) {
         [sg_view setBlurred:SGRPlayerLyricsOpen() animated:NO];
@@ -520,4 +849,6 @@ void SGRPlayerMenuSetBackground(SGRPlayerBackgroundKind kind) {
     SGLog(@"redesign player: background switched to %@ from the menu", SGRPlayerBackgroundNames()[(NSUInteger)kind]);
     SGRPlayerHoldField();
     SGRPlayerVisualiserUpdate();
+    // Mosaic plays the animated cover in the square: the track is looked up again for it, or let go.
+    if (kind == SGRPlayerBackgroundMosaic || current == SGRPlayerBackgroundMosaic) SGRPlayerMotionRestart();
 }
