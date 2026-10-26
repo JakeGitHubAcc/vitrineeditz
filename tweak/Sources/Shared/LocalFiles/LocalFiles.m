@@ -13,7 +13,39 @@ static const CGFloat kCoverSide = 1200;
 NSNotificationName const SGLocalFileEditsDidChangeNotification = @"spotifyglass.localFiles.editsDidChange";
 
 static NSDictionary<NSString *, NSDictionary *> *sg_edits;
+// The edited URIs by the names in them ("artist
+album
+title", decoded and lowercased): a file's URI made by Local
+// Albums before the player played it can differ from the player's own (its escapes, its length a second off), so an
+// edit made on the album's page is found for the player's URI by its names and length too.
+static NSDictionary<NSString *, NSArray<NSString *> *> *sg_editsByName;
 static os_unfair_lock sg_lock = OS_UNFAIR_LOCK_INIT;
+// A file's length read two ways may differ by this many seconds.
+static const NSInteger kSecondsSlack = 2;
+
+static NSString *decoded(NSString *part);
+
+// The names in a URI as one key, nil for a URI not of a local file's four parts; `seconds` its length.
+static NSString *nameKey(NSString *uri, NSInteger *seconds) {
+    if (![uri isKindOfClass:NSString.class] || ![uri hasPrefix:kLocalPrefix]) return nil;
+    NSArray<NSString *> *parts = [[uri substringFromIndex:kLocalPrefix.length] componentsSeparatedByString:@":"];
+    if (parts.count != 4) return nil;
+    if (seconds) *seconds = parts[3].integerValue;
+    return [NSString stringWithFormat:@"%@
+%@
+%@", decoded(parts[0]).lowercaseString, decoded(parts[1]).lowercaseString, decoded(parts[2]).lowercaseString];
+}
+
+static NSDictionary<NSString *, NSArray<NSString *> *> *byName(NSDictionary<NSString *, NSDictionary *> *edits) {
+    NSMutableDictionary<NSString *, NSMutableArray<NSString *> *> *names = [NSMutableDictionary dictionary];
+    for (NSString *uri in edits) {
+        NSString *key = nameKey(uri, NULL);
+        if (!key) continue;
+        if (!names[key]) names[key] = [NSMutableArray array];
+        [names[key] addObject:uri];
+    }
+    return names;
+}
 
 BOOL SGLocalFileIs(NSString *uri) {
     return [uri isKindOfClass:NSString.class] && [uri hasPrefix:kLocalPrefix];
@@ -23,8 +55,11 @@ static NSDictionary<NSString *, NSDictionary *> *allEdits(void) {
     static dispatch_once_t once;
     dispatch_once(&once, ^{
         id stored = [NSUserDefaults.standardUserDefaults dictionaryForKey:SGKeyLocalFileEdits];
+        NSDictionary *edits = [stored isKindOfClass:NSDictionary.class] ? stored : @{};
+        NSDictionary *names = byName(edits);
         os_unfair_lock_lock(&sg_lock);
-        sg_edits = [stored isKindOfClass:NSDictionary.class] ? stored : @{};
+        sg_edits = edits;
+        sg_editsByName = names;
         os_unfair_lock_unlock(&sg_lock);
     });
     os_unfair_lock_lock(&sg_lock);
@@ -34,8 +69,10 @@ static NSDictionary<NSString *, NSDictionary *> *allEdits(void) {
 }
 
 static void storeEdits(NSDictionary<NSString *, NSDictionary *> *edits) {
+    NSDictionary *names = byName(edits);
     os_unfair_lock_lock(&sg_lock);
     sg_edits = [edits copy];
+    sg_editsByName = names;
     os_unfair_lock_unlock(&sg_lock);
     if (edits.count) [NSUserDefaults.standardUserDefaults setObject:edits forKey:SGKeyLocalFileEdits];
     else [NSUserDefaults.standardUserDefaults removeObjectForKey:SGKeyLocalFileEdits];
@@ -43,7 +80,24 @@ static void storeEdits(NSDictionary<NSString *, NSDictionary *> *edits) {
 
 NSDictionary<NSString *, id> *SGLocalFileEditFor(NSString *uri) {
     if (!SGLocalFileIs(uri)) return nil;
-    id edit = allEdits()[uri];
+    NSDictionary *edits = allEdits();
+    id edit = edits[uri];
+    if (!edit) {
+        // The same file under another spelling of its URI.
+        NSInteger seconds = 0;
+        NSString *key = nameKey(uri, &seconds);
+        os_unfair_lock_lock(&sg_lock);
+        NSArray<NSString *> *same = key ? sg_editsByName[key] : nil;
+        os_unfair_lock_unlock(&sg_lock);
+        for (NSString *other in same) {
+            NSInteger otherSeconds = 0;
+            nameKey(other, &otherSeconds);
+            if (labs(otherSeconds - seconds) <= kSecondsSlack) {
+                edit = edits[other];
+                break;
+            }
+        }
+    }
     return [edit isKindOfClass:NSDictionary.class] ? edit : nil;
 }
 
@@ -175,6 +229,8 @@ NSDictionary<NSString *, id> *SGLocalFileShown(NSString *uri) {
 // The URIs that are explicit, swapped whole under the edits' lock: read on whatever thread Spotify reads metadata on.
 // Made from what is stored: the user's marks, and the lyrics' explicit verdicts less the files marked clean.
 static NSSet<NSString *> *sg_explicit;
+// The same by their names, for a file whose URI the player spells another way than the album's page did.
+static NSSet<NSString *> *sg_explicitNames;
 
 static NSSet<NSString *> *storedSet(NSString *key) {
     id stored = [NSUserDefaults.standardUserDefaults arrayForKey:key];
@@ -193,8 +249,14 @@ static void remakeExplicit(void) {
     for (NSString *uri in verdicts) {
         if (verdicts[uri].integerValue == SGLocalFileLyricsExplicit && ![clean containsObject:uri]) [explicit addObject:uri];
     }
+    NSMutableSet<NSString *> *names = [NSMutableSet set];
+    for (NSString *uri in explicit) {
+        NSString *key = nameKey(uri, NULL);
+        if (key) [names addObject:key];
+    }
     os_unfair_lock_lock(&sg_lock);
     sg_explicit = [explicit copy];
+    sg_explicitNames = names;
     os_unfair_lock_unlock(&sg_lock);
 }
 
@@ -220,7 +282,13 @@ static NSString *plainURI(NSString *uri) {
 BOOL SGLocalFileExplicit(NSString *uri) {
     if (!SGLocalFileIs(uri)) return NO;
     NSRange mark = [uri rangeOfString:@"#" options:NSBackwardsSearch];
-    return [explicitMarks() containsObject:mark.location == NSNotFound ? uri : [uri substringToIndex:mark.location]];
+    NSString *plain = mark.location == NSNotFound ? uri : [uri substringToIndex:mark.location];
+    if ([explicitMarks() containsObject:plain]) return YES;
+    NSString *key = nameKey(plain, NULL);
+    os_unfair_lock_lock(&sg_lock);
+    BOOL named = key && [sg_explicitNames containsObject:key];
+    os_unfair_lock_unlock(&sg_lock);
+    return named;
 }
 
 static void changed(NSString *uri);
