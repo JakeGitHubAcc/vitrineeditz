@@ -2,6 +2,7 @@
 #import <AudioToolbox/AudioToolbox.h>
 #import "Core/SGCore.h"
 #import "Headers/SPTPlayer.h"
+#import "Shared/AutoMix/AutoMix.h"
 #import "Shared/Player/PlayerState.h"
 #import "LocalFiles.h"
 #import "LocalAlbums.h"
@@ -503,6 +504,50 @@ static void playThroughQueue(SGLocalAlbum *album, NSUInteger from, BOOL shuffle,
 // +[SPTPlayerContext contextWithTracks:] and -playContext:options:, the player stopped instead, 9.1.94.)
 static NSString *sg_playingKey, *sg_playingTitle;
 
+#pragma mark - song into song
+
+// From one song of a local album into the next with no gap: Spotify's player leaves a moment of silence as it opens
+// the next file from the queue, but a crossfade has it start the next file before the last one ends. So while a
+// local album played from its page plays, Spotify's crossfade is set to kSeamMilliseconds, too short to hear as a
+// fade, and Automix off (it has nothing to go on for a local file); Spotify's own settings are put back as the
+// album ends. They are kept under SGKeyLocalAlbumSavedTransitions while the album's are set, so an app quit mid-album
+// puts them back on the next launch, at the first state the player reports.
+#define SGKeyLocalAlbumSavedTransitions @"spotifyglass.localAlbums.savedTransitions"
+static const NSInteger kSeamMilliseconds = 300;
+
+static void songIntoSong(BOOL on) {
+    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+    NSArray<NSNumber *> *saved = [defaults arrayForKey:SGKeyLocalAlbumSavedTransitions];
+    if (on) {
+        SGTransitionSettings now;
+        if (saved.count == 3 || !SGTransitionSettingsRead(&now)) return;
+        [defaults setObject:@[@(now.automix), @(now.crossfade), @(now.milliseconds)] forKey:SGKeyLocalAlbumSavedTransitions];
+        SGTransitionSettingsWrite((SGTransitionSettings){NO, YES, kSeamMilliseconds});
+        SGLog(@"local albums: crossfade %ld ms while the album plays", (long)kSeamMilliseconds);
+    } else if (saved.count == 3) {
+        if (!SGTransitionSettingsWrite((SGTransitionSettings){saved[0].boolValue, saved[1].boolValue, saved[2].integerValue})) return;
+        [defaults removeObjectForKey:SGKeyLocalAlbumSavedTransitions];
+        SGLog(@"local albums: Spotify's crossfade put back");
+    }
+}
+
+@interface SGLocalAlbumSeams : NSObject <SGPlayerStateObserver>
+@end
+
+@implementation SGLocalAlbumSeams
+- (void)playerStateDidChange:(SPTPlayerState *)state {
+    songIntoSong(SGLocalAlbumPlayingTitle() != nil);
+}
+@end
+
+__attribute__((constructor)) static void watchSeams(void) {
+    static SGLocalAlbumSeams *seams;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        seams = [SGLocalAlbumSeams new];
+        SGAddPlayerStateObserver(seams);
+    });
+}
+
 void SGLocalAlbumPlay(SGLocalAlbum *album, NSUInteger from, BOOL shuffle, void (^done)(NSString *error)) {
     NSCAssert(NSThread.isMainThread, @"local albums run on main");
     playThroughQueue(album, from, shuffle, ^(NSString *error) {
@@ -510,6 +555,7 @@ void SGLocalAlbumPlay(SGLocalAlbum *album, NSUInteger from, BOOL shuffle, void (
             sg_playingKey = album.key;
             sg_playingTitle = album.title;
             SGLocalFilesRecredit();
+            songIntoSong(YES);
         }
         done(error);
     });
