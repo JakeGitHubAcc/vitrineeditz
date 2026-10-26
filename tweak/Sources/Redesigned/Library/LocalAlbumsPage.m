@@ -542,6 +542,8 @@ static UIControl *rowSource(NSString *symbol, NSString *word, void (^tapped)(voi
 
     [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(albumsChanged) name:SGLocalAlbumsDidChangeNotification object:nil];
     [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(fieldColorChanged:) name:SGRFieldColorDidChangeNotification object:_field];
+    // A track marked explicit, or renamed, shows it at once.
+    [NSNotificationCenter.defaultCenter addObserver:self.tableView selector:@selector(reloadData) name:SGLocalFileEditsDidChangeNotification object:nil];
     [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(showMotion) name:SGAnimatedCoverSavedNotification object:nil];
     SGAddPlayerStateObserver(self);
     _playing = SGURIString(SGPlayerState().track.URI);
