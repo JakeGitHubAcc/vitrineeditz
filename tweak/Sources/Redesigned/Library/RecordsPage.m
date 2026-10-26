@@ -144,11 +144,11 @@ static SGRRecord *recordOfSaved(id item) {
     if ([first isKindOfClass:NSDictionary.class] && [first[@"url"] isKindOfClass:NSString.class]) record.picture = first[@"url"];
     record.added = dateOf(item[@"added_at"]) ?: NSDate.distantPast;
     NSDictionary *tracks = [album[@"tracks"] isKindOfClass:NSDictionary.class] ? album[@"tracks"] : nil;
-    NSMutableArray<NSString *> *names = [NSMutableArray array];
+    NSMutableArray<NSString *> *trackNames = [NSMutableArray array];
     for (id track in [tracks[@"items"] isKindOfClass:NSArray.class] ? tracks[@"items"] : @[]) {
-        if ([track isKindOfClass:NSDictionary.class] && [track[@"name"] isKindOfClass:NSString.class]) [names addObject:track[@"name"]];
+        if ([track isKindOfClass:NSDictionary.class] && [track[@"name"] isKindOfClass:NSString.class]) [trackNames addObject:track[@"name"]];
     }
-    if (names.count) record.trackNames = names;
+    if (trackNames.count) record.trackNames = trackNames;
     return record;
 }
 
