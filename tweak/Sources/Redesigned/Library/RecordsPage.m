@@ -314,12 +314,15 @@ static void shine(CALayer *sticker, CGFloat place) {
 }
 
 // The label strip stood on its end, for the sleeve's left edge: its writing reading down, the letters' tops to the
-// right, as a record's spine reads.
+// right, as a record's spine reads. The edge is seen from its back (its face is turned in toward the sleeve), so the
+// picture is drawn mirrored, to read the right way round from outside.
 static UIImage *standing(UIImage *label) {
     CGSize size = CGSizeMake(label.size.height, label.size.width);
     UIGraphicsImageRendererFormat *format = [UIGraphicsImageRendererFormat preferredFormat];
     format.scale = label.scale;
     return [[[UIGraphicsImageRenderer alloc] initWithSize:size format:format] imageWithActions:^(UIGraphicsImageRendererContext *context) {
+        CGContextTranslateCTM(context.CGContext, size.width, 0);
+        CGContextScaleCTM(context.CGContext, -1, 1);
         CGContextTranslateCTM(context.CGContext, size.width, 0);
         CGContextRotateCTM(context.CGContext, M_PI_2);
         [label drawInRect:CGRectMake(0, 0, label.size.width, label.size.height)];
