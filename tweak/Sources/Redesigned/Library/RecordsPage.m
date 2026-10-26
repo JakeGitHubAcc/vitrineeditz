@@ -2,19 +2,21 @@
 // of records flipped through. Opened from a tab of its own, vitrine:records (Shared/Navigation/Links.h), which the
 // bar gets once (Navbar.h, SGRNavbarAddTabOnce) and the Add a Tab presets offer after that.
 //
-// The crate, as the prototype that matched the video had it: every record is its cover with a label strip along its
-// bottom edge, the title and the artist, and leans back about that edge. The ones by the focus lie almost flat, so
-// their labels are what is read; the further one is from it the more it stands up and shows its cover. From one
-// record's bottom edge to the next is the first one's label and the next one's cover as the perspective shows them,
-// so the crate packs itself as the tilt changes. Scrolling moves the focus a record per kStep points and settles on
-// one. A tap on a record pulls it out of the crate: it lifts out and stands up in the middle, over the crate dimmed,
-// its title and artist under it. A tap on it then opens its album, pushed onto the tab's stack over the crate, which
-// is there again, the record still out, on the way back; a tap anywhere else, or a scroll, puts it back. Behind the
-// crate is the focused cover, blurred and darkened.
+// The crate: every record is its cover with a label strip along its bottom edge, the title and the artist, leaning
+// back about that edge, all of them alike, so a little of each cover shows over its label. Scrolling moves the
+// crate along and settles with a record at the focus, whose cover is behind the crate, blurred and darkened.
 //
-// With Vinyl & CD Scans on (the menu), a record wears its sleeve as a vinyl or CD release of it was scanned, front
-// and spine, when the Cover Art Archive has them (RecordScans.h). A label strip with no spine scan is drawn in the
-// cover's colors: its most common one behind, and the one of its colors that reads best on that for the text.
+// A tap on a record pulls it out: it lifts out and stands up in the middle, over the crate dimmed, its title and
+// artist under it, as a sleeve: its front, its back, and its edges. Dragging across it turns it over; a gatefold
+// sleeve has Open Gatefold under it, which swings the front open on its left edge to show the inside. A tap on it
+// opens its album, pushed onto the tab's stack over the crate (the record still out on the way back); a tap anywhere
+// else puts it back.
+//
+// With Vinyl Scans on (the menu), a record wears its sleeve as a vinyl pressing of it was scanned, front, back,
+// spine, hype sticker and gatefold, when the Cover Art Archive has them (RecordScans.h); a sticker scanned on its own
+// goes on the front's top right corner, where one usually is. A record with no scanned back has one drawn, its
+// tracks listed in the cover's colors, and a label strip with no spine scan is drawn in them too: the cover's most
+// common color behind, and the one of its colors that reads best on that for the text.
 //
 // Spotify's albums are the Web API's saved albums (GET /v1/me/albums, Shared/Navigation/WebAPI.h), every page of
 // them, kept for the next open; the local ones come from Shared/LocalFiles/LocalAlbums.h. Both are listed newest
@@ -41,16 +43,15 @@ static NSString *const kRecordsURI = @"vitrine:records";
 // The sleeves' scans; on unless switched off.
 #define SGKeyRecordsScans @"spotifyglass.records.scans"
 
-// The crate's tuning, the prototype's: where the focus sits down the page, the tilt by it and far from it (degrees
-// back from upright), how many records the tilt takes to open up, the room between records, the label's depth, the
-// perspective's distance, the widest cover, and how far a scroll goes for each record.
-static const CGFloat kFocusY = 0.42, kFlat = 88, kOpen = 58, kReach = 4, kGap = 6, kSpine = 18;
-static const CGFloat kPerspective = 2400, kMaxWidth = 340, kStep = 64;
+// The crate: where the focus sits down the page, how far every record leans back from upright (degrees), the room
+// between records, the label's depth, the perspective's distance and the widest cover.
+static const CGFloat kFocusY = 0.42, kTilt = 78, kGap = 6, kSpine = 18, kPerspective = 2400, kMaxWidth = 340;
 // Records further than this from the focus let their pictures go; the sleeves are looked for this close to it.
 static const NSInteger kKeepPictures = 30, kScanReach = 6;
-// A record out of the crate: how far it still leans back, how dark the crate goes behind it, and the room under
-// it for its title and artist.
-static const CGFloat kPulledTilt = 4, kPulledDim = 0.55, kCaption = 70;
+// A record out of the crate: how far it still leans back, its perspective, how dark the crate goes behind it, the
+// room under it for its title, artist and the gatefold's button, the sleeve's thickness, and a hype sticker's width
+// as a share of the cover's.
+static const CGFloat kPulledTilt = 4, kPulledPerspective = 1400, kPulledDim = 0.55, kCaption = 110, kThick = 4, kSticker = 0.26;
 
 typedef NS_ENUM(NSInteger, SGRRecordsSort) {
     SGRRecordsSortAdded,
@@ -72,6 +73,8 @@ typedef NS_ENUM(NSInteger, SGRRecordsShow) {
 @property (nonatomic, copy) NSString *uri;
 // The cover's address, Spotify's only.
 @property (nonatomic, copy) NSString *picture;
+// Spotify's album_type: album, single, ep or compilation.
+@property (nonatomic, copy) NSString *kind;
 @property (nonatomic, strong) SGLocalAlbum *local;
 @property (nonatomic, strong) NSDate *added;
 // What tells it apart from every other record: its URI, or a local album's names.
@@ -102,6 +105,7 @@ static SGRRecord *recordOfSaved(id item) {
     SGRRecord *record = [SGRRecord new];
     record.uri = album[@"uri"];
     record.title = [album[@"name"] isKindOfClass:NSString.class] ? album[@"name"] : @"";
+    record.kind = [album[@"album_type"] isKindOfClass:NSString.class] ? album[@"album_type"] : @"album";
     NSMutableArray<NSString *> *names = [NSMutableArray array];
     for (id artist in [album[@"artists"] isKindOfClass:NSArray.class] ? album[@"artists"] : @[]) {
         if ([artist isKindOfClass:NSDictionary.class] && [artist[@"name"] isKindOfClass:NSString.class]) [names addObject:artist[@"name"]];
@@ -134,6 +138,15 @@ static void readSavedAlbums(NSMutableArray<SGRRecord *> *sofar, NSString *path, 
     });
 }
 
+static NSString *localKind(SGLocalAlbum *album) {
+    switch (SGLocalAlbumShownType(album)) {
+        case SGLocalAlbumTypeSingle: return @"single";
+        case SGLocalAlbumTypeEP: return @"ep";
+        case SGLocalAlbumTypeCompilation: return @"compilation";
+        default: return @"album";
+    }
+}
+
 static NSArray<SGRRecord *> *localRecords(void) {
     NSMutableArray<SGRRecord *> *records = [NSMutableArray array];
     for (SGLocalAlbum *album in SGLocalAlbums()) {
@@ -141,6 +154,7 @@ static NSArray<SGRRecord *> *localRecords(void) {
         SGRRecord *record = [SGRRecord new];
         record.title = album.title;
         record.artist = album.artist;
+        record.kind = localKind(album);
         record.local = album;
         record.added = album.added ?: NSDate.distantPast;
         [records addObject:record];
@@ -148,27 +162,25 @@ static NSArray<SGRRecord *> *localRecords(void) {
     return records;
 }
 
-#pragma mark - the crate's geometry
+#pragma mark - geometry
 
 static CGFloat radians(CGFloat degrees) {
     return degrees * M_PI / 180;
 }
 
-// How far back a record `distance` records from the focus leans.
-static CGFloat tiltAt(CGFloat distance) {
-    CGFloat x = MIN(fabs(distance) / kReach, 1);
-    return kFlat + (kOpen - kFlat) * (x * x * (3 - 2 * x));
-}
-
-// The record leaned back `tilt` degrees about its bottom edge, in perspective from the focus `depth` points above
-// that edge. The layer's anchor is the middle of the bottom edge.
-static CATransform3D recordTransform(CGFloat tilt, CGFloat depth) {
+// A record turned `turn` radians about its upright middle, then `between` (an open gatefold's move), leaned back
+// `tilt` degrees about its bottom edge, and seen in perspective from `distance` away, from in front of its own
+// middle, so every record in the crate looks alike. The layer's anchor is the middle of the bottom edge; `width` is
+// the cover's.
+static CATransform3D recordPose(CGFloat turn, CATransform3D between, CGFloat tilt, CGFloat distance, CGFloat width) {
     CATransform3D perspective = CATransform3DIdentity;
-    perspective.m34 = -1 / kPerspective;
-    CATransform3D t = CATransform3DMakeRotation(radians(tilt), 1, 0, 0);
-    t = CATransform3DConcat(t, CATransform3DMakeTranslation(0, depth, 0));
+    perspective.m34 = -1 / distance;
+    CATransform3D t = CATransform3DMakeRotation(turn, 0, 1, 0);
+    t = CATransform3DConcat(t, between);
+    t = CATransform3DConcat(t, CATransform3DMakeRotation(radians(tilt), 1, 0, 0));
+    t = CATransform3DConcat(t, CATransform3DMakeTranslation(0, width / 2, 0));
     t = CATransform3DConcat(t, perspective);
-    return CATransform3DConcat(t, CATransform3DMakeTranslation(0, -depth, 0));
+    return CATransform3DConcat(t, CATransform3DMakeTranslation(0, -width / 2, 0));
 }
 
 static CGPoint project(CATransform3D t, CGFloat x, CGFloat y, CGFloat z) {
@@ -177,28 +189,66 @@ static CGPoint project(CATransform3D t, CGFloat x, CGFloat y, CGFloat z) {
     return CGPointMake((x * t.m11 + y * t.m21 + z * t.m31 + t.m41) / w, (x * t.m12 + y * t.m22 + z * t.m32 + t.m42) / w);
 }
 
+static CALayer *panel(CGRect frame, UIImage *picture, UIColor *color) {
+    CALayer *layer = [CALayer layer];
+    layer.frame = frame;
+    layer.contents = (id)picture.CGImage;
+    layer.contentsGravity = kCAGravityResizeAspectFill;
+    layer.masksToBounds = YES;
+    layer.backgroundColor = color.CGColor;
+    layer.contentsScale = UIScreen.mainScreen.scale;
+    return layer;
+}
+
+// The front with a sticker scanned on its own put where one usually is, on the top right corner.
+static UIImage *withSticker(UIImage *front, UIImage *sticker) {
+    if (!sticker || sticker.size.width <= 0) return front;
+    CGSize size = front.size;
+    UIGraphicsImageRendererFormat *format = [UIGraphicsImageRendererFormat preferredFormat];
+    format.scale = front.scale;
+    format.opaque = YES;
+    return [[[UIGraphicsImageRenderer alloc] initWithSize:size format:format] imageWithActions:^(UIGraphicsImageRendererContext *context) {
+        [front drawInRect:CGRectMake(0, 0, size.width, size.height)];
+        CGFloat width = size.width * kSticker, height = width * sticker.size.height / sticker.size.width;
+        CGFloat inset = size.width * 0.04;
+        CGContextSetShadowWithColor(context.CGContext, CGSizeMake(0, 1), 3, [UIColor colorWithWhite:0 alpha:0.35].CGColor);
+        [sticker drawInRect:CGRectMake(size.width - inset - width, inset, width, height)];
+    }];
+}
+
 #pragma mark - the page
 
-@interface SGRRecordsPage : SGPage
+@interface SGRRecordsPage : SGPage <UIGestureRecognizerDelegate>
 @end
 
 @implementation SGRRecordsPage {
     NSArray<SGRRecord *> *_records;
     NSArray<CATransformLayer *> *_layers;
     NSArray<CALayer *> *_faces, *_spines;
-    // The covers, the sleeves' scanned fronts and spines, and the label colors taken from the covers, by record key.
-    NSCache<NSString *, UIImage *> *_pictures, *_fronts, *_spineScans;
+    // The covers, the fronts to show (a scan with its sticker on), the drawn backs, the sleeves found, the label
+    // colors taken from the covers and the track names, by record key.
+    NSCache<NSString *, UIImage *> *_pictures, *_fronts, *_backs;
+    NSMutableDictionary<NSString *, SGRSleeve *> *_sleeves;
     NSMutableDictionary<NSString *, NSArray<UIColor *> *> *_colors;
-    NSMutableSet<NSString *> *_asked, *_scansAsked;
+    NSMutableDictionary<NSString *, NSArray<NSString *> *> *_tracks;
+    NSMutableSet<NSString *> *_asked, *_sleevesAsked, *_tracksAsked;
     UIImageView *_backdrop;
     UIView *_stage;
     CALayer *_dim;
     UILabel *_note, *_pulledTitle, *_pulledArtist;
+    UIButton *_gateButton;
     UIView *_spacer;
     CGFloat _width;
     NSInteger _focused;
     // The record pulled out of the crate, and the one going back into it; -1 for none.
     NSInteger _pulled, _returning;
+    // The record out of the crate: its flap and other extra layers, how far it is turned (radians), and whether its
+    // gatefold is open.
+    CATransformLayer *_flap;
+    NSArray<CALayer *> *_extras;
+    CGFloat _turn, _turnStart;
+    BOOL _opened;
+    UIPanGestureRecognizer *_turner;
     BOOL _loading;
     UISelectionFeedbackGenerator *_tick;
 }
@@ -208,10 +258,13 @@ static CGPoint project(CATransform3D t, CGFloat x, CGFloat y, CGFloat z) {
     self.title = @"Records";
     _pictures = [NSCache new];
     _fronts = [NSCache new];
-    _spineScans = [NSCache new];
+    _backs = [NSCache new];
+    _sleeves = [NSMutableDictionary dictionary];
     _colors = [NSMutableDictionary dictionary];
+    _tracks = [NSMutableDictionary dictionary];
     _asked = [NSMutableSet set];
-    _scansAsked = [NSMutableSet set];
+    _sleevesAsked = [NSMutableSet set];
+    _tracksAsked = [NSMutableSet set];
     _focused = _pulled = _returning = -1;
     return self;
 }
@@ -265,11 +318,24 @@ static CGPoint project(CATransform3D t, CGFloat x, CGFloat y, CGFloat z) {
     _pulledArtist.textAlignment = NSTextAlignmentCenter;
     _pulledArtist.alpha = 0;
     [back addSubview:_pulledArtist];
+    // Its taps are the table's (-tapped:), which knows where it is.
+    UIButtonConfiguration *gate = [UIButtonConfiguration grayButtonConfiguration];
+    gate.image = [UIImage systemImageNamed:@"book"];
+    gate.imagePadding = 6;
+    gate.cornerStyle = UIButtonConfigurationCornerStyleCapsule;
+    gate.baseForegroundColor = UIColor.whiteColor;
+    _gateButton = [UIButton buttonWithConfiguration:gate primaryAction:nil];
+    _gateButton.userInteractionEnabled = NO;
+    _gateButton.hidden = YES;
+    [back addSubview:_gateButton];
     table.backgroundView = back;
 
     _spacer = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 1, 1)];
     table.tableFooterView = _spacer;
     [table addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(tapped:)]];
+    _turner = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(turned:)];
+    _turner.delegate = self;
+    [table addGestureRecognizer:_turner];
     _tick = [UISelectionFeedbackGenerator new];
 
     [self updateMenu];
@@ -307,11 +373,11 @@ static CGPoint project(CATransform3D t, CGFloat x, CGFloat y, CGFloat z) {
     [CATransaction setDisableActions:YES];
     _dim.frame = _stage.bounds;
     [CATransaction commit];
-    [self fitSpacer];
     if (_width != [self recordWidth]) {
         [self dropPulled];
         [self makeLayers];
     }
+    [self fitSpacer];
     [self render];
 }
 
@@ -344,7 +410,7 @@ static CGPoint project(CATransform3D t, CGFloat x, CGFloat y, CGFloat z) {
         }
         return [UIMenu menuWithTitle:title image:nil identifier:nil options:UIMenuOptionsDisplayInline children:actions];
     };
-    UIAction *scans = [UIAction actionWithTitle:@"Vinyl & CD Scans" image:[UIImage systemImageNamed:@"opticaldisc"] identifier:nil handler:^(UIAction *action) {
+    UIAction *scans = [UIAction actionWithTitle:@"Vinyl Scans" image:[UIImage systemImageNamed:@"opticaldisc"] identifier:nil handler:^(UIAction *action) {
         SGSetEnabled(SGKeyRecordsScans, !SGEnabled(SGKeyRecordsScans));
         [weakSelf updateMenu];
         [weakSelf redrawSleeves];
@@ -409,7 +475,7 @@ static CGPoint project(CATransform3D t, CGFloat x, CGFloat y, CGFloat z) {
     [self fitSpacer];
     UITableView *table = self.tableView;
     CGFloat top = table.adjustedContentInset.top;
-    [table setContentOffset:CGPointMake(0, (keep == NSNotFound ? 0 : (CGFloat)keep) * kStep - top) animated:NO];
+    [table setContentOffset:CGPointMake(0, (keep == NSNotFound ? 0 : (CGFloat)keep) * [self step] - top) animated:NO];
     [self updateNote];
     [self render];
 }
@@ -421,12 +487,12 @@ static CGPoint project(CATransform3D t, CGFloat x, CGFloat y, CGFloat z) {
     _note.hidden = !_note.text;
 }
 
-// The table scrolls a record per kStep: one screen past the last record's place.
+// The table scrolls a record per step, the room one record takes in the crate: one screen past the last's place.
 - (void)fitSpacer {
     UITableView *table = self.tableView;
     UIEdgeInsets inset = table.adjustedContentInset;
     CGFloat visible = MAX(0, table.bounds.size.height - inset.top - inset.bottom);
-    CGFloat height = visible + (CGFloat)(_records.count ? _records.count - 1 : 0) * kStep;
+    CGFloat height = visible + (CGFloat)(_records.count ? _records.count - 1 : 0) * [self step];
     if (fabs(_spacer.frame.size.height - height) < 0.5) return;
     _spacer.frame = CGRectMake(0, 0, table.bounds.size.width, height);
     table.tableFooterView = _spacer;
@@ -436,6 +502,12 @@ static CGPoint project(CATransform3D t, CGFloat x, CGFloat y, CGFloat z) {
 
 - (CGFloat)recordWidth {
     return floor(MIN(kMaxWidth, self.tableView.bounds.size.width * 0.8));
+}
+
+// From one record's bottom edge to the next's: the first one's label and the next one's cover, leaned back.
+- (CGFloat)step {
+    CGFloat width = _width > 0 ? _width : [self recordWidth];
+    return MAX(1, kSpine * sin(radians(kTilt)) + width * cos(radians(kTilt)) + kGap);
 }
 
 - (void)makeLayers {
@@ -477,14 +549,20 @@ static CGPoint project(CATransform3D t, CGFloat x, CGFloat y, CGFloat z) {
     _spines = spines;
 }
 
+- (SGRSleeve *)sleeveOf:(SGRRecord *)record {
+    return [self scans] ? _sleeves[[record key]] : nil;
+}
+
+- (NSArray<UIColor *> *)colorsOf:(SGRRecord *)record {
+    return _colors[[record key]] ?: @[[UIColor colorWithWhite:0.106 alpha:1], UIColor.whiteColor];
+}
+
 // The strip along the record's bottom edge: the sleeve's own spine when one was found, else the title and the
 // artist in the cover's colors, white on dark gray until the cover is in.
 - (UIImage *)labelFor:(SGRRecord *)record {
-    NSString *key = [record key];
-    NSArray<UIColor *> *colors = _colors[key];
-    UIColor *back = colors.firstObject ?: [UIColor colorWithWhite:0.106 alpha:1];
-    UIColor *ink = colors.lastObject ?: UIColor.whiteColor;
-    UIImage *scan = [self scans] ? [_spineScans objectForKey:key] : nil;
+    NSArray<UIColor *> *colors = [self colorsOf:record];
+    UIColor *back = colors.firstObject, *ink = colors.lastObject;
+    UIImage *scan = [self sleeveOf:record].spine;
     CGSize size = CGSizeMake(_width, kSpine);
     UIGraphicsImageRendererFormat *format = [UIGraphicsImageRendererFormat preferredFormat];
     format.opaque = YES;
@@ -514,10 +592,80 @@ static CGPoint project(CATransform3D t, CGFloat x, CGFloat y, CGFloat z) {
     }];
 }
 
-// What the record's cover shows: the sleeve's scanned front when there is one, else the album's cover.
+// What the record's cover shows: the sleeve's scanned front, its sticker on, when there is one, else the album's cover.
 - (UIImage *)faceOf:(SGRRecord *)record {
     NSString *key = [record key];
     return ([self scans] ? [_fronts objectForKey:key] : nil) ?: [_pictures objectForKey:key];
+}
+
+// The sleeve's back: its scan, else drawn in the cover's colors with the album's name and its tracks.
+- (UIImage *)backOf:(SGRRecord *)record {
+    SGRSleeve *sleeve = [self sleeveOf:record];
+    if (sleeve.back) return sleeve.back;
+    NSString *key = [record key];
+    UIImage *drawn = [_backs objectForKey:key];
+    if (drawn) return drawn;
+    NSArray<NSString *> *tracks = _tracks[key];
+    if (!tracks) [self askTracksOf:record];
+    tracks = _tracks[key];
+    NSArray<UIColor *> *colors = [self colorsOf:record];
+    UIColor *paper = colors.firstObject, *ink = colors.lastObject;
+    CGSize size = CGSizeMake(_width, _width);
+    UIGraphicsImageRendererFormat *format = [UIGraphicsImageRendererFormat preferredFormat];
+    format.opaque = YES;
+    drawn = [[[UIGraphicsImageRenderer alloc] initWithSize:size format:format] imageWithActions:^(UIGraphicsImageRendererContext *context) {
+        [paper setFill];
+        UIRectFill(CGRectMake(0, 0, size.width, size.height));
+        CGFloat pad = round(size.width * 0.08), y = pad, inner = size.width - 2 * pad;
+        NSDictionary *heading = @{NSFontAttributeName: [UIFont systemFontOfSize:18 weight:UIFontWeightHeavy], NSForegroundColorAttributeName: ink};
+        NSDictionary *byline = @{NSFontAttributeName: [UIFont systemFontOfSize:12 weight:UIFontWeightMedium], NSForegroundColorAttributeName: [ink colorWithAlphaComponent:0.75]};
+        NSStringDrawingOptions options = NSStringDrawingUsesLineFragmentOrigin | NSStringDrawingTruncatesLastVisibleLine;
+        [record.title.uppercaseString ?: @"" drawWithRect:CGRectMake(pad, y, inner, 24) options:options attributes:heading context:nil];
+        y += 26;
+        [record.artist ?: @"" drawWithRect:CGRectMake(pad, y, inner, 16) options:options attributes:byline context:nil];
+        y += 30;
+        // The tracks, in two columns when one would run off the bottom.
+        UIFont *font = [UIFont systemFontOfSize:10];
+        CGFloat line = ceil(font.lineHeight) + 3, room = size.height - pad - y;
+        NSUInteger rows = MAX((NSUInteger)1, (NSUInteger)floor(room / line));
+        BOOL two = tracks.count > rows;
+        CGFloat column = two ? (inner - pad / 2) / 2 : inner;
+        NSDictionary *listed = @{NSFontAttributeName: font, NSForegroundColorAttributeName: [ink colorWithAlphaComponent:0.9]};
+        for (NSUInteger i = 0; i < tracks.count && i < (two ? rows * 2 : rows); i++) {
+            NSUInteger row = i % rows;
+            CGFloat x = pad + (i >= rows ? column + pad / 2 : 0);
+            NSString *text = [NSString stringWithFormat:@"%lu. %@", (unsigned long)(i + 1), tracks[i]];
+            [text drawWithRect:CGRectMake(x, y + row * line, column, line) options:options attributes:listed context:nil];
+        }
+    }];
+    if (tracks) [_backs setObject:drawn forKey:key];
+    return drawn;
+}
+
+- (void)askTracksOf:(SGRRecord *)record {
+    NSString *key = [record key];
+    if (_tracks[key] || [_tracksAsked containsObject:key]) return;
+    [_tracksAsked addObject:key];
+    if (record.local) {
+        NSMutableArray<NSString *> *names = [NSMutableArray array];
+        for (SGLocalTrack *track in record.local.tracks) [names addObject:track.title ?: @""];
+        _tracks[key] = names;
+        return;
+    }
+    NSString *album = [record.uri componentsSeparatedByString:@":"].lastObject;
+    if (!album.length) return;
+    __weak SGRRecordsPage *weakSelf = self;
+    SGWebAPI(@"GET", [NSString stringWithFormat:@"albums/%@/tracks?limit=50", album], ^(NSInteger status, id answer) {
+        SGRRecordsPage *page = weakSelf;
+        if (!page || status != 200 || ![answer isKindOfClass:NSDictionary.class]) return;
+        NSMutableArray<NSString *> *names = [NSMutableArray array];
+        for (id track in [answer[@"items"] isKindOfClass:NSArray.class] ? answer[@"items"] : @[]) {
+            if ([track isKindOfClass:NSDictionary.class] && [track[@"name"] isKindOfClass:NSString.class]) [names addObject:track[@"name"]];
+        }
+        page->_tracks[key] = names;
+        [page->_backs removeObjectForKey:key];
+        [page redressPulled];
+    });
 }
 
 // The record's face and label drawn again, wherever it is in the crate.
@@ -529,15 +677,18 @@ static CGPoint project(CATransform3D t, CGFloat x, CGFloat y, CGFloat z) {
         _spines[i].contents = nil;
         UIImage *face = [self faceOf:_records[i]];
         if (face) _faces[i].contents = (id)face.CGImage;
-        if ((NSInteger)i == _focused || (NSInteger)i == _pulled) {
+        if (((NSInteger)i == _focused && _pulled < 0) || (NSInteger)i == _pulled) {
             if (face) [self showBackdrop:face];
         }
     }
     [CATransaction commit];
+    [_backs removeObjectForKey:key];
+    if (_pulled >= 0 && [[_records[(NSUInteger)_pulled] key] isEqualToString:key]) [self redressPulled];
     [self render];
 }
 
 - (void)redrawSleeves {
+    [_backs removeAllObjects];
     [CATransaction begin];
     [CATransaction setDisableActions:YES];
     for (NSUInteger i = 0; i < _layers.count; i++) {
@@ -547,11 +698,10 @@ static CGPoint project(CATransform3D t, CGFloat x, CGFloat y, CGFloat z) {
     [CATransaction commit];
     _focused = -1;
     [self render];
-    for (NSUInteger i = 0; _pulled >= 0 && i < _layers.count; i++) {
-        if ((NSInteger)i != _pulled) continue;
-        UIImage *face = [self faceOf:_records[i]];
-        if (face) _faces[i].contents = (id)face.CGImage;
-        _spines[i].contents = (id)[self labelFor:_records[i]].CGImage;
+    if (_pulled >= 0) {
+        UIImage *face = [self faceOf:_records[(NSUInteger)_pulled]];
+        if (face) _faces[(NSUInteger)_pulled].contents = (id)face.CGImage;
+        [self redressPulled];
     }
 }
 
@@ -595,18 +745,26 @@ static CGPoint project(CATransform3D t, CGFloat x, CGFloat y, CGFloat z) {
     }] resume];
 }
 
-- (void)askScansOf:(NSUInteger)index {
+// The sleeve is looked for once the album's cover is in, which its front must match.
+- (void)askSleeveOf:(NSUInteger)index {
     SGRRecord *record = _records[index];
     NSString *key = [record key];
-    if ([_scansAsked containsObject:key]) return;
-    [_scansAsked addObject:key];
+    UIImage *cover = [_pictures objectForKey:key];
+    if (!cover || [_sleevesAsked containsObject:key]) return;
+    [_sleevesAsked addObject:key];
     __weak SGRRecordsPage *weakSelf = self;
-    SGRRecordScans(record.title, record.artist, ^(UIImage *front, UIImage *spine) {
-        SGRRecordsPage *page = weakSelf;
-        if (!page || (!front && !spine)) return;
-        if (front) [page->_fronts setObject:front forKey:key];
-        if (spine) [page->_spineScans setObject:spine forKey:key];
-        [page redrawRecordWithKey:key];
+    SGRRecordSleeve(record.title, record.artist, record.kind, cover, ^(SGRSleeve *sleeve) {
+        if (!weakSelf || !sleeve.front) return;
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+            UIImage *front = withSticker(sleeve.front, sleeve.sticker);
+            dispatch_async(dispatch_get_main_queue(), ^{
+                SGRRecordsPage *page = weakSelf;
+                if (!page) return;
+                page->_sleeves[key] = sleeve;
+                [page->_fronts setObject:front forKey:key];
+                [page redrawRecordWithKey:key];
+            });
+        });
     });
 }
 
@@ -618,7 +776,7 @@ static CGPoint project(CATransform3D t, CGFloat x, CGFloat y, CGFloat z) {
 
 - (CGFloat)focus {
     UITableView *table = self.tableView;
-    CGFloat focus = (table.contentOffset.y + table.adjustedContentInset.top) / kStep;
+    CGFloat focus = (table.contentOffset.y + table.adjustedContentInset.top) / [self step];
     return MIN(MAX(focus, 0), (CGFloat)(_records.count ? _records.count - 1 : 0));
 }
 
@@ -629,32 +787,22 @@ static CGPoint project(CATransform3D t, CGFloat x, CGFloat y, CGFloat z) {
     return inset.top + kFocusY * MAX(0, _stage.bounds.size.height - inset.top - inset.bottom);
 }
 
-- (CATransform3D)transformOf:(NSUInteger)index bottoms:(const CGFloat *)bottoms focus:(CGFloat)focus line:(CGFloat)line {
-    return recordTransform(tiltAt((CGFloat)index - focus), bottoms[index] - line);
+// Every record in the crate leans the same.
+- (CATransform3D)crateTransform {
+    return recordPose(0, CATransform3DIdentity, kTilt, kPerspective, _width);
 }
 
-// Each record's bottom edge down the stage: from one to the next is the first one's label and the next one's
-// cover, as their tilts show them. Placed so the focus, between two records, falls on the focus line.
-- (void)bottoms:(CGFloat *)bottoms focus:(CGFloat)focus line:(CGFloat)line {
-    NSUInteger count = _records.count;
-    bottoms[0] = 0;
-    for (NSUInteger i = 1; i < count; i++) {
-        CGFloat above = tiltAt((CGFloat)(i - 1) - focus), here = tiltAt((CGFloat)i - focus);
-        bottoms[i] = bottoms[i - 1] + kSpine * sin(radians(above)) + _width * cos(radians(here)) + kGap;
-    }
-    NSUInteger at = (NSUInteger)floor(focus);
-    CGFloat part = focus - (CGFloat)at;
-    CGFloat there = at + 1 < count ? bottoms[at] + part * (bottoms[at + 1] - bottoms[at]) : bottoms[at];
-    for (NSUInteger i = 0; i < count; i++) bottoms[i] += line - there;
+// Record `index`'s bottom edge down the stage, a step from the next, the focus on the focus line.
+- (CGFloat)bottomOf:(NSUInteger)index focus:(CGFloat)focus {
+    return [self focusLine] + ((CGFloat)index - focus) * [self step];
 }
 
 - (void)render {
     NSUInteger count = _records.count;
     if (!count || _layers.count != count || _width <= 0) return;
-    CGFloat focus = [self focus], line = [self focusLine];
+    CGFloat focus = [self focus];
     CGFloat height = _stage.bounds.size.height, middle = _stage.bounds.size.width / 2;
-    CGFloat *bottoms = malloc(count * sizeof(CGFloat));
-    [self bottoms:bottoms focus:focus line:line];
+    CATransform3D crate = [self crateTransform];
     BOOL scans = [self scans];
 
     [CATransaction begin];
@@ -663,8 +811,9 @@ static CGPoint project(CATransform3D t, CGFloat x, CGFloat y, CGFloat z) {
         // The record out of the crate, or on its way back, moves by its own animation.
         BOOL apart = (NSInteger)i == _pulled || (NSInteger)i == _returning;
         CATransformLayer *record = _layers[i];
+        CGFloat bottom = [self bottomOf:i focus:focus];
         BOOL near = fabs((CGFloat)i - focus) <= kKeepPictures;
-        BOOL shown = apart || (near && bottoms[i] > -kSpine && bottoms[i] - _width < height + kSpine);
+        BOOL shown = apart || (near && bottom > -kSpine && bottom - _width < height + kSpine);
         record.hidden = !shown;
         CALayer *face = _faces[i], *spine = _spines[i];
         if (!near && !apart) {
@@ -674,18 +823,17 @@ static CGPoint project(CATransform3D t, CGFloat x, CGFloat y, CGFloat z) {
         }
         if (!shown) continue;
         if (!apart) {
-            record.position = CGPointMake(middle, bottoms[i]);
-            record.transform = [self transformOf:i bottoms:bottoms focus:focus line:line];
+            record.position = CGPointMake(middle, bottom);
+            record.transform = crate;
         }
         SGRRecord *item = _records[i];
         UIImage *picture = [self faceOf:item];
         if (picture) face.contents = (id)picture.CGImage;
         if (![_pictures objectForKey:[item key]]) [self askPictureOf:i];
-        if (scans && fabs((CGFloat)i - focus) <= kScanReach) [self askScansOf:i];
+        else if (scans && fabs((CGFloat)i - focus) <= kScanReach) [self askSleeveOf:i];
         if (!spine.contents) spine.contents = (id)[self labelFor:item].CGImage;
     }
     [CATransaction commit];
-    free(bottoms);
 
     NSInteger focused = (NSInteger)lround(focus);
     if (focused != _focused) {
@@ -696,9 +844,9 @@ static CGPoint project(CATransform3D t, CGFloat x, CGFloat y, CGFloat z) {
     }
 }
 
-#pragma mark pulling a record out
+#pragma mark a record out of the crate
 
-// Where a record out of the crate stands: upright in the middle of what the bars leave, its title and artist under it.
+// Where a record out of the crate stands: upright in the middle of what the bars leave, its caption under it.
 - (CGFloat)pulledBottom {
     UITableView *table = self.tableView;
     UIEdgeInsets inset = table.adjustedContentInset;
@@ -706,9 +854,120 @@ static CGPoint project(CATransform3D t, CGFloat x, CGFloat y, CGFloat z) {
     return inset.top + (visible + _width) / 2 - kCaption / 2;
 }
 
+// How much an open gatefold, twice as wide, is made smaller to fit.
+- (CGFloat)openScale {
+    return MIN(1, (_stage.bounds.size.width - 24) / (2 * _width));
+}
+
 - (CGRect)pulledFrame {
-    CGFloat bottom = [self pulledBottom];
-    return CGRectMake((_stage.bounds.size.width - _width) / 2, bottom - _width, _width, _width);
+    CGFloat bottom = [self pulledBottom], middle = _stage.bounds.size.width / 2;
+    if (!_opened) return CGRectMake(middle - _width / 2, bottom - _width, _width, _width);
+    CGFloat side = _width * [self openScale];
+    return CGRectMake(middle - side, bottom - (_width + side) / 2, 2 * side, side);
+}
+
+// The record out of the crate as it stands now: turned, and opened out and made smaller to fit when its gatefold is
+// open (moved right by half a cover, so the spread is in the middle, and kept in the middle down the page).
+- (CATransform3D)pulledPose {
+    CATransform3D between = CATransform3DIdentity;
+    if (_opened) {
+        CGFloat scale = [self openScale];
+        between = CATransform3DMakeTranslation(_width / 2, 0, 0);
+        between = CATransform3DConcat(between, CATransform3DMakeScale(scale, scale, scale));
+        between = CATransform3DConcat(between, CATransform3DMakeTranslation(0, -(_width - _width * scale) / 2, 0));
+    }
+    return recordPose(_turn, between, kPulledTilt, kPulledPerspective, _width);
+}
+
+// The record out of the crate made a sleeve: its front on a flap hinged at its left edge (the gatefold's front, or
+// the whole front), the inside on the flap's other side and under it, the back facing behind, and the four edges.
+- (void)dress:(NSUInteger)index {
+    [self undress];
+    CATransformLayer *record = _layers[index];
+    CALayer *face = _faces[index];
+    SGRRecord *item = _records[index];
+    SGRSleeve *sleeve = [self sleeveOf:item];
+    UIColor *edge = [self colorsOf:item].firstObject;
+    CGFloat side = _width;
+    CGRect whole = CGRectMake(0, 0, side, side);
+    NSMutableArray<CALayer *> *extras = [NSMutableArray array];
+
+    _flap = [CATransformLayer layer];
+    _flap.bounds = whole;
+    _flap.anchorPoint = CGPointMake(0, 0.5);
+    _flap.position = CGPointMake(0, side / 2);
+    [face removeFromSuperlayer];
+    face.frame = whole;
+    face.doubleSided = NO;
+    [_flap addSublayer:face];
+    if (sleeve.gatefold.count == 2) {
+        CALayer *left = panel(whole, sleeve.gatefold[0], edge);
+        left.doubleSided = NO;
+        left.zPosition = -0.5;
+        left.transform = CATransform3DMakeRotation(M_PI, 0, 1, 0);
+        [_flap addSublayer:left];
+        CALayer *right = panel(whole, sleeve.gatefold[1], edge);
+        right.doubleSided = NO;
+        right.zPosition = -1;
+        [record addSublayer:right];
+        [extras addObject:right];
+    }
+    [record addSublayer:_flap];
+    [extras addObject:_flap];
+
+    CALayer *back = panel(whole, [self backOf:item], edge);
+    back.doubleSided = NO;
+    back.zPosition = -kThick;
+    back.transform = CATransform3DMakeRotation(M_PI, 0, 1, 0);
+    [record addSublayer:back];
+    [extras addObject:back];
+    for (int i = 0; i < 4; i++) {
+        CALayer *strip = [CALayer layer];
+        BOOL upright = i < 2;
+        strip.bounds = upright ? CGRectMake(0, 0, kThick, side) : CGRectMake(0, 0, side, kThick);
+        strip.position = upright ? CGPointMake(i == 0 ? 0 : side, side / 2) : CGPointMake(side / 2, i == 2 ? 0 : side);
+        strip.zPosition = -kThick / 2;
+        strip.transform = upright ? CATransform3DMakeRotation(M_PI_2, 0, 1, 0) : CATransform3DMakeRotation(M_PI_2, 1, 0, 0);
+        strip.backgroundColor = edge.CGColor;
+        [record addSublayer:strip];
+        [extras addObject:strip];
+    }
+    _extras = extras;
+    _spines[index].hidden = YES;
+}
+
+// Back to a record in the crate: its front on it again, the rest gone.
+- (void)undress {
+    if (!_flap) return;
+    for (NSUInteger i = 0; i < _faces.count; i++) {
+        CALayer *face = _faces[i];
+        if (face.superlayer != _flap) continue;
+        [face removeFromSuperlayer];
+        face.doubleSided = YES;
+        face.frame = CGRectMake(0, 0, _width, _width);
+        [_layers[i] insertSublayer:face atIndex:0];
+        _spines[i].hidden = NO;
+    }
+    for (CALayer *layer in _extras) [layer removeFromSuperlayer];
+    _extras = nil;
+    _flap = nil;
+}
+
+// The sleeve made again for what has come in since (a scan, the tracks), as it stands.
+- (void)redressPulled {
+    if (_pulled < 0) return;
+    BOOL opened = _opened;
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    [self dress:(NSUInteger)_pulled];
+    if (opened && [self sleeveOf:_records[(NSUInteger)_pulled]].gatefold.count == 2) {
+        _flap.transform = CATransform3DMakeRotation(-M_PI, 0, 1, 0);
+    } else if (opened) {
+        _opened = NO;
+        _layers[(NSUInteger)_pulled].transform = [self pulledPose];
+    }
+    [CATransaction commit];
+    [self placeCaption];
 }
 
 // The record moves from `from` through a point `lift` above it to `to`, as one animation of its position and
@@ -717,7 +976,6 @@ static CGPoint project(CATransform3D t, CGFloat x, CGFloat y, CGFloat z) {
           to:(CGPoint)to transform:(CATransform3D)toTransform liftFirst:(BOOL)liftFirst done:(void (^)(void))done {
     CGPoint middle = liftFirst ? CGPointMake(from.x, from.y - lift) : CGPointMake(to.x, to.y - lift);
     CATransform3D middleTransform = liftFirst ? fromTransform : toTransform;
-    CFTimeInterval duration = 0.55;
     CAKeyframeAnimation *position = [CAKeyframeAnimation animationWithKeyPath:@"position"];
     position.values = @[[NSValue valueWithCGPoint:from], [NSValue valueWithCGPoint:middle], [NSValue valueWithCGPoint:to]];
     CAKeyframeAnimation *transform = [CAKeyframeAnimation animationWithKeyPath:@"transform"];
@@ -727,7 +985,7 @@ static CGPoint project(CATransform3D t, CGFloat x, CGFloat y, CGFloat z) {
     for (CAKeyframeAnimation *animation in @[position, transform]) {
         animation.keyTimes = @[@0, @0.4, @1];
         animation.timingFunctions = @[ease, ease];
-        animation.duration = duration;
+        animation.duration = 0.55;
     }
     [CATransaction begin];
     [CATransaction setDisableActions:YES];
@@ -739,46 +997,57 @@ static CGPoint project(CATransform3D t, CGFloat x, CGFloat y, CGFloat z) {
     [CATransaction commit];
 }
 
-// Where record `index` sits in the crate now.
-- (void)slotOf:(NSUInteger)index position:(CGPoint *)position transform:(CATransform3D *)transform {
-    NSUInteger count = _records.count;
-    CGFloat focus = [self focus], line = [self focusLine];
-    CGFloat *bottoms = malloc(count * sizeof(CGFloat));
-    [self bottoms:bottoms focus:focus line:line];
-    *position = CGPointMake(_stage.bounds.size.width / 2, bottoms[index]);
-    *transform = [self transformOf:index bottoms:bottoms focus:focus line:line];
-    free(bottoms);
+- (void)fadeDim:(float)opacity {
+    CABasicAnimation *fade = [CABasicAnimation animationWithKeyPath:@"opacity"];
+    fade.fromValue = @(_dim.presentationLayer.opacity);
+    fade.toValue = @(opacity);
+    fade.duration = 0.4;
+    _dim.opacity = opacity;
+    [_dim addAnimation:fade forKey:@"fade"];
+}
+
+// The title, the artist and the gatefold's button under the record out of the crate.
+- (void)placeCaption {
+    CGFloat bottom = [self pulledBottom], width = _stage.bounds.size.width - 48;
+    _pulledTitle.frame = CGRectMake(24, bottom + 18, width, 26);
+    _pulledArtist.frame = CGRectMake(24, bottom + 46, width, 20);
+    BOOL gatefold = _pulled >= 0 && [self sleeveOf:_records[(NSUInteger)_pulled]].gatefold.count == 2;
+    _gateButton.hidden = !gatefold;
+    if (!gatefold) return;
+    UIButtonConfiguration *gate = _gateButton.configuration;
+    gate.title = _opened ? @"Close Gatefold" : @"Open Gatefold";
+    _gateButton.configuration = gate;
+    CGSize size = [_gateButton sizeThatFits:CGSizeMake(width, 36)];
+    _gateButton.frame = CGRectMake((_stage.bounds.size.width - size.width) / 2, bottom + 76, size.width, MAX(size.height, 34));
 }
 
 - (void)pullOut:(NSUInteger)index {
     if (_returning >= 0) [self finishReturn];
     CATransformLayer *layer = _layers[index];
-    CGPoint from;
-    CATransform3D fromTransform;
-    [self slotOf:index position:&from transform:&fromTransform];
+    CGPoint from = CGPointMake(_stage.bounds.size.width / 2, [self bottomOf:index focus:[self focus]]);
+    CATransform3D fromTransform = [self crateTransform];
     _pulled = (NSInteger)index;
+    _turn = 0;
+    _opened = NO;
+    self.tableView.scrollEnabled = NO;
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    [self dress:index];
     layer.zPosition = 1000;
-    CGFloat bottom = [self pulledBottom];
-    CGPoint to = CGPointMake(_stage.bounds.size.width / 2, bottom);
-    [self move:layer from:from transform:fromTransform lift:_width * 0.6 to:to
-     transform:recordTransform(kPulledTilt, bottom - [self focusLine]) liftFirst:YES done:nil];
-
-    CABasicAnimation *dim = [CABasicAnimation animationWithKeyPath:@"opacity"];
-    dim.fromValue = @(_dim.presentationLayer.opacity);
-    dim.toValue = @(kPulledDim);
-    dim.duration = 0.4;
-    _dim.opacity = (float)kPulledDim;
-    [_dim addAnimation:dim forKey:@"fade"];
+    [CATransaction commit];
+    CGPoint to = CGPointMake(_stage.bounds.size.width / 2, [self pulledBottom]);
+    [self move:layer from:from transform:fromTransform lift:_width * 0.6 to:to transform:[self pulledPose] liftFirst:YES done:nil];
+    [self fadeDim:(float)kPulledDim];
 
     SGRRecord *record = _records[index];
     _pulledTitle.text = record.title;
     _pulledArtist.text = record.artist;
-    CGFloat width = _stage.bounds.size.width - 48;
-    _pulledTitle.frame = CGRectMake(24, bottom + 20, width, 26);
-    _pulledArtist.frame = CGRectMake(24, bottom + 48, width, 20);
+    [self placeCaption];
+    _gateButton.alpha = 0;
     [UIView animateWithDuration:0.3 delay:0.3 options:UIViewAnimationOptionAllowUserInteraction animations:^{
         self->_pulledTitle.alpha = 1;
         self->_pulledArtist.alpha = 1;
+        self->_gateButton.alpha = 1;
     } completion:nil];
     UIImage *face = [self faceOf:record];
     if (face) [self showBackdrop:face];
@@ -790,26 +1059,36 @@ static CGPoint project(CATransform3D t, CGFloat x, CGFloat y, CGFloat z) {
     NSUInteger index = (NSUInteger)_pulled;
     CATransformLayer *layer = _layers[index];
     CALayer *now = layer.presentationLayer ?: layer;
-    CGPoint from = now.position, to;
-    CATransform3D fromTransform = now.transform, toTransform;
-    [self slotOf:index position:&to transform:&toTransform];
+    CGPoint from = now.position;
+    CATransform3D fromTransform = now.transform;
+    // A gatefold left open closes as the record goes.
+    if (_opened && _flap) {
+        CABasicAnimation *shut = [CABasicAnimation animationWithKeyPath:@"transform.rotation.y"];
+        shut.fromValue = @(-M_PI);
+        shut.toValue = @0;
+        shut.duration = 0.35;
+        [CATransaction begin];
+        [CATransaction setDisableActions:YES];
+        _flap.transform = CATransform3DIdentity;
+        [_flap addAnimation:shut forKey:@"shut"];
+        [CATransaction commit];
+    }
+    _opened = NO;
+    _turn = 0;
     _pulled = -1;
     _returning = (NSInteger)index;
+    self.tableView.scrollEnabled = YES;
+    CGPoint to = CGPointMake(_stage.bounds.size.width / 2, [self bottomOf:index focus:[self focus]]);
     __weak SGRRecordsPage *weakSelf = self;
-    [self move:layer from:from transform:fromTransform lift:_width * 0.6 to:to transform:toTransform liftFirst:NO done:^{
+    [self move:layer from:from transform:fromTransform lift:_width * 0.6 to:to transform:[self crateTransform] liftFirst:NO done:^{
         SGRRecordsPage *page = weakSelf;
         if (page && page->_returning == (NSInteger)index) [page finishReturn];
     }];
-
-    CABasicAnimation *dim = [CABasicAnimation animationWithKeyPath:@"opacity"];
-    dim.fromValue = @(_dim.presentationLayer.opacity);
-    dim.toValue = @0;
-    dim.duration = 0.4;
-    _dim.opacity = 0;
-    [_dim addAnimation:dim forKey:@"fade"];
+    [self fadeDim:0];
     [UIView animateWithDuration:0.2 delay:0 options:UIViewAnimationOptionAllowUserInteraction animations:^{
         self->_pulledTitle.alpha = 0;
         self->_pulledArtist.alpha = 0;
+        self->_gateButton.alpha = 0;
     } completion:nil];
     UIImage *face = _focused >= 0 && _focused < (NSInteger)_records.count ? [self faceOf:_records[(NSUInteger)_focused]] : nil;
     if (face) [self showBackdrop:face];
@@ -820,74 +1099,162 @@ static CGPoint project(CATransform3D t, CGFloat x, CGFloat y, CGFloat z) {
     if (_returning < (NSInteger)_layers.count) {
         CATransformLayer *layer = _layers[(NSUInteger)_returning];
         [layer removeAllAnimations];
+        [CATransaction begin];
+        [CATransaction setDisableActions:YES];
+        [self undress];
         layer.zPosition = 0;
+        [CATransaction commit];
     }
     _returning = -1;
+    _gateButton.hidden = YES;
     [self render];
 }
 
 // Back in the crate at once, for a crate that is about to be made again.
 - (void)dropPulled {
-    _pulled = _returning = -1;
     [CATransaction begin];
     [CATransaction setDisableActions:YES];
+    [self undress];
     _dim.opacity = 0;
     [CATransaction commit];
+    _pulled = _returning = -1;
+    _opened = NO;
+    _turn = 0;
+    self.tableView.scrollEnabled = YES;
     _pulledTitle.alpha = 0;
     _pulledArtist.alpha = 0;
+    _gateButton.hidden = YES;
 }
 
-#pragma mark scrolling and taps
+// The gatefold's front swings open on its left edge, the record moving over and getting smaller so the spread fits;
+// or closes again.
+- (void)toggleGatefold {
+    if (_pulled < 0 || !_flap) return;
+    CATransformLayer *layer = _layers[(NSUInteger)_pulled];
+    CATransform3D was = (layer.presentationLayer ?: layer).transform;
+    BOOL opening = !_opened;
+    _opened = opening;
+    _turn = 0;
+    CABasicAnimation *swing = [CABasicAnimation animationWithKeyPath:@"transform.rotation.y"];
+    swing.fromValue = @(opening ? 0 : -M_PI);
+    swing.toValue = @(opening ? -M_PI : 0);
+    CABasicAnimation *move = [CABasicAnimation animationWithKeyPath:@"transform"];
+    move.fromValue = [NSValue valueWithCATransform3D:was];
+    move.toValue = [NSValue valueWithCATransform3D:[self pulledPose]];
+    for (CABasicAnimation *animation in @[swing, move]) {
+        animation.duration = 0.7;
+        animation.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut];
+    }
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    _flap.transform = opening ? CATransform3DMakeRotation(-M_PI, 0, 1, 0) : CATransform3DIdentity;
+    layer.transform = [self pulledPose];
+    [_flap addAnimation:swing forKey:@"swing"];
+    [layer addAnimation:move forKey:@"open"];
+    [CATransaction commit];
+    [self placeCaption];
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
+}
+
+#pragma mark scrolling, taps and turning
 
 - (void)scrollViewDidScroll:(UIScrollView *)scroll {
     [self render];
 }
 
 - (void)scrollViewWillBeginDragging:(UIScrollView *)scroll {
-    [self putBack];
     [_tick prepare];
 }
 
 // Every scroll settles with a record on the focus.
 - (void)scrollViewWillEndDragging:(UIScrollView *)scroll withVelocity:(CGPoint)velocity targetContentOffset:(inout CGPoint *)target {
     if (!_records.count) return;
-    CGFloat top = scroll.adjustedContentInset.top;
-    CGFloat index = MIN(MAX(round((target->y + top) / kStep), 0), (CGFloat)(_records.count - 1));
-    target->y = index * kStep - top;
+    CGFloat top = scroll.adjustedContentInset.top, step = [self step];
+    CGFloat index = MIN(MAX(round((target->y + top) / step), 0), (CGFloat)(_records.count - 1));
+    target->y = index * step - top;
 }
 
-// A record in the crate comes out of it; the record out of it opens its album, and a tap anywhere else puts it back.
+// Turning starts only on the record out of the crate, its gatefold shut.
+- (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer *)recognizer {
+    if (recognizer != _turner) return YES;
+    if (_pulled < 0 || _opened) return NO;
+    return CGRectContainsPoint(CGRectInset([self pulledFrame], -20, -20), [_turner locationInView:_stage]);
+}
+
+// Dragging across the record turns it, half a turn for a cover's width, and lets go on its front or its back.
+- (void)turned:(UIPanGestureRecognizer *)pan {
+    if (_pulled < 0) return;
+    CATransformLayer *layer = _layers[(NSUInteger)_pulled];
+    CGFloat across = [pan translationInView:_stage].x;
+    switch (pan.state) {
+        case UIGestureRecognizerStateBegan:
+            [layer removeAllAnimations];
+            _turnStart = _turn;
+            break;
+        case UIGestureRecognizerStateChanged: {
+            _turn = _turnStart + across / _width * M_PI;
+            [CATransaction begin];
+            [CATransaction setDisableActions:YES];
+            layer.transform = [self pulledPose];
+            [CATransaction commit];
+            break;
+        }
+        case UIGestureRecognizerStateEnded:
+        case UIGestureRecognizerStateCancelled: {
+            CGFloat thrown = _turn + [pan velocityInView:_stage].x / _width * M_PI * 0.2;
+            CATransform3D was = layer.transform;
+            _turn = round(thrown / M_PI) * M_PI;
+            CABasicAnimation *settle = [CABasicAnimation animationWithKeyPath:@"transform"];
+            settle.fromValue = [NSValue valueWithCATransform3D:was];
+            settle.toValue = [NSValue valueWithCATransform3D:[self pulledPose]];
+            settle.duration = 0.3;
+            settle.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseOut];
+            [CATransaction begin];
+            [CATransaction setDisableActions:YES];
+            layer.transform = [self pulledPose];
+            [layer addAnimation:settle forKey:@"settle"];
+            [CATransaction commit];
+            // Kept within one turn, which looks the same.
+            _turn = fmod(_turn, 2 * M_PI);
+            break;
+        }
+        default:
+            break;
+    }
+}
+
+// A record in the crate comes out of it; the record out of it opens its album, its button opens or shuts its
+// gatefold, and a tap anywhere else puts it back.
 - (void)tapped:(UITapGestureRecognizer *)tap {
     NSUInteger count = _records.count;
     if (!count || _layers.count != count) return;
     CGPoint point = [tap locationInView:_stage];
     if (_pulled >= 0) {
-        if (CGRectContainsPoint(CGRectInset([self pulledFrame], -8, -8), point)) [self open:_records[(NSUInteger)_pulled]];
+        if (!_gateButton.hidden && CGRectContainsPoint(CGRectInset(_gateButton.frame, -8, -8), point)) [self toggleGatefold];
+        else if (CGRectContainsPoint(CGRectInset([self pulledFrame], -8, -8), point)) [self open:_records[(NSUInteger)_pulled]];
         else [self putBack];
         return;
     }
-    CGFloat focus = [self focus], line = [self focusLine], half = _width / 2;
-    CGFloat *bottoms = malloc(count * sizeof(CGFloat));
-    [self bottoms:bottoms focus:focus line:line];
-    NSInteger hit = -1;
-    // The lower records lie over the ones above them.
-    for (NSInteger i = (NSInteger)count - 1; i >= 0 && hit < 0; i--) {
-        if (_layers[(NSUInteger)i].hidden || i == _returning) continue;
-        CATransform3D t = [self transformOf:(NSUInteger)i bottoms:bottoms focus:focus line:line];
-        CGPoint corners[] = {project(t, -half, -_width, 0), project(t, half, -_width, 0), project(t, -half, 0, 0),
-                             project(t, half, 0, 0), project(t, -half, 0, -kSpine), project(t, half, 0, -kSpine)};
-        CGFloat minX = CGFLOAT_MAX, maxX = -CGFLOAT_MAX, minY = CGFLOAT_MAX, maxY = -CGFLOAT_MAX;
-        for (int c = 0; c < 6; c++) {
-            minX = MIN(minX, corners[c].x);
-            maxX = MAX(maxX, corners[c].x);
-            minY = MIN(minY, corners[c].y);
-            maxY = MAX(maxY, corners[c].y);
-        }
-        CGFloat x = point.x - _stage.bounds.size.width / 2, y = point.y - bottoms[i];
-        if (x >= minX && x <= maxX && y >= minY && y <= maxY) hit = i;
+    CGFloat focus = [self focus], half = _width / 2, middle = _stage.bounds.size.width / 2;
+    CATransform3D t = [self crateTransform];
+    CGPoint corners[] = {project(t, -half, -_width, 0), project(t, half, -_width, 0), project(t, -half, 0, 0),
+                         project(t, half, 0, 0), project(t, -half, 0, -kSpine), project(t, half, 0, -kSpine)};
+    CGFloat minX = CGFLOAT_MAX, maxX = -CGFLOAT_MAX, minY = CGFLOAT_MAX, maxY = -CGFLOAT_MAX;
+    for (int c = 0; c < 6; c++) {
+        minX = MIN(minX, corners[c].x);
+        maxX = MAX(maxX, corners[c].x);
+        minY = MIN(minY, corners[c].y);
+        maxY = MAX(maxY, corners[c].y);
     }
-    free(bottoms);
-    if (hit >= 0) [self pullOut:(NSUInteger)hit];
+    // The lower records lie over the ones above them.
+    for (NSInteger i = (NSInteger)count - 1; i >= 0; i--) {
+        if (_layers[(NSUInteger)i].hidden || i == _returning) continue;
+        CGFloat x = point.x - middle, y = point.y - [self bottomOf:(NSUInteger)i focus:focus];
+        if (x >= minX && x <= maxX && y >= minY && y <= maxY) {
+            [self pullOut:(NSUInteger)i];
+            return;
+        }
+    }
 }
 
 // Pushed onto this tab's stack, over the crate; back from it, the record is still out.

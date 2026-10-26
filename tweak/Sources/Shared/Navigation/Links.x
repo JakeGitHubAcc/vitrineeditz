@@ -15,6 +15,18 @@ void SGRegisterModPage(NSString *uri, UIViewController *(^make)(void)) {
     sg_modPages[uri.lowercaseString] = [make copy];
 }
 
+// The navigation stack on screen inside `page`, the deepest: the selected tab's, whose view is in the window. The
+// window's root holds no stack itself, and a page shown from it is presented over everything, the pages it opens
+// going under it.
+static UINavigationController *shownNavigation(UIViewController *page) {
+    for (UIViewController *child in page.childViewControllers) {
+        if (!child.viewIfLoaded.window) continue;
+        UINavigationController *found = shownNavigation(child);
+        if (found) return found;
+    }
+    return [page isKindOfClass:UINavigationController.class] && page.viewIfLoaded.window ? (UINavigationController *)page : nil;
+}
+
 static UIViewController *(^modPageFor(NSURL *uri))(void) {
     if (![uri.scheme.lowercaseString isEqualToString:@"vitrine"]) return nil;
     return sg_modPages[uri.absoluteString.lowercaseString];
@@ -33,7 +45,8 @@ BOOL SGOpenSpotifyURI(NSURL *uri) {
     if (make) {
         UIViewController *top = SGTopController();
         if (!top) return NO;
-        SGShowPage(top, make());
+        UINavigationController *nav = top.navigationController ?: shownNavigation(top);
+        SGShowPage(nav.topViewController ?: top, make());
         return YES;
     }
     SPTLinkDispatcherImplementation *dispatcher = sg_linkDispatcher;
