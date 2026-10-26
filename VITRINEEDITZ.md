@@ -17,7 +17,6 @@ Tested on Spotify 9.1.94 under iOS 26, with Redesigned UI on.
 
 **Player**
 - **Mosaic**: a sixth player background (Redesigned UI), picked on the Player page or from the player's ⋯ menu. A dark wall of dots in the cover's colors lights up in bars out of the cover's edges with the music: bass from the sides, treble from the top and bottom. Where the album has an animated cover, it plays in the middle in place of the still one. **Dots across** and **Dot size** set how fine the wall is, and **Shadow under text** (on by default) keeps the title, times and buttons readable over bright dots.
-- **Share as Instagram Note**: in the player's ⋯ menu. Writes the playing song up as an Instagram note (60 characters) with a preview of how it looks in the notes tray. Pick a template or type your own, styled letters (bold, script, outline, typewriter, small caps, bubbles and more), lowercase or UPPERCASE, an emoji, and **Match album colors**, which adds the cover's colors as heart, circle, square or nature emoji and tints the sheet. Instagram doesn't let other apps post notes, so it copies the note and opens Instagram's messages, where you paste it into your note.
 
 **Local files**
 - **Local Albums**: your local files grouped into albums, the way iTunes and YouTube Music show them.
