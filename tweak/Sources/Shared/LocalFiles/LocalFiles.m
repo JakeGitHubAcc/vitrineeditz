@@ -172,21 +172,49 @@ NSDictionary<NSString *, id> *SGLocalFileShown(NSString *uri) {
 
 #pragma mark - explicit
 
-// The URIs marked explicit, swapped whole under the edits' lock: read on whatever thread Spotify reads metadata on.
+// The URIs that are explicit, swapped whole under the edits' lock: read on whatever thread Spotify reads metadata on.
+// Made from what is stored: the user's marks, and the lyrics' explicit verdicts less the files marked clean.
 static NSSet<NSString *> *sg_explicit;
+
+static NSSet<NSString *> *storedSet(NSString *key) {
+    id stored = [NSUserDefaults.standardUserDefaults arrayForKey:key];
+    return [NSSet setWithArray:[stored isKindOfClass:NSArray.class] ? stored : @[]];
+}
+
+static NSDictionary<NSString *, NSNumber *> *storedVerdicts(void) {
+    id stored = [NSUserDefaults.standardUserDefaults dictionaryForKey:SGKeyLocalFileLyricsVerdicts];
+    return [stored isKindOfClass:NSDictionary.class] ? stored : @{};
+}
+
+static void remakeExplicit(void) {
+    NSMutableSet<NSString *> *explicit = [storedSet(SGKeyLocalFileExplicit) mutableCopy];
+    NSSet<NSString *> *clean = storedSet(SGKeyLocalFileClean);
+    NSDictionary<NSString *, NSNumber *> *verdicts = storedVerdicts();
+    for (NSString *uri in verdicts) {
+        if (verdicts[uri].integerValue == SGLocalFileLyricsExplicit && ![clean containsObject:uri]) [explicit addObject:uri];
+    }
+    os_unfair_lock_lock(&sg_lock);
+    sg_explicit = [explicit copy];
+    os_unfair_lock_unlock(&sg_lock);
+}
 
 static NSSet<NSString *> *explicitMarks(void) {
     static dispatch_once_t once;
-    dispatch_once(&once, ^{
-        id stored = [NSUserDefaults.standardUserDefaults arrayForKey:SGKeyLocalFileExplicit];
-        os_unfair_lock_lock(&sg_lock);
-        sg_explicit = [NSSet setWithArray:[stored isKindOfClass:NSArray.class] ? stored : @[]];
-        os_unfair_lock_unlock(&sg_lock);
-    });
+    dispatch_once(&once, ^{ remakeExplicit(); });
     os_unfair_lock_lock(&sg_lock);
     NSSet *marks = sg_explicit;
     os_unfair_lock_unlock(&sg_lock);
     return marks;
+}
+
+static void storeSet(NSString *key, NSSet<NSString *> *set) {
+    if (set.count) [NSUserDefaults.standardUserDefaults setObject:set.allObjects forKey:key];
+    else [NSUserDefaults.standardUserDefaults removeObjectForKey:key];
+}
+
+static NSString *plainURI(NSString *uri) {
+    NSRange mark = [uri rangeOfString:@"#" options:NSBackwardsSearch];
+    return mark.location == NSNotFound ? uri : [uri substringToIndex:mark.location];
 }
 
 BOOL SGLocalFileExplicit(NSString *uri) {
@@ -199,15 +227,37 @@ static void changed(NSString *uri);
 
 void SGLocalFileSetExplicit(NSString *uri, BOOL marked) {
     if (!SGLocalFileIs(uri) || SGLocalFileExplicit(uri) == marked) return;
-    NSMutableSet *marks = [explicitMarks() mutableCopy];
-    if (marked) [marks addObject:uri];
-    else [marks removeObject:uri];
-    os_unfair_lock_lock(&sg_lock);
-    sg_explicit = [marks copy];
-    os_unfair_lock_unlock(&sg_lock);
-    if (marks.count) [NSUserDefaults.standardUserDefaults setObject:marks.allObjects forKey:SGKeyLocalFileExplicit];
-    else [NSUserDefaults.standardUserDefaults removeObjectForKey:SGKeyLocalFileExplicit];
+    uri = plainURI(uri);
+    NSMutableSet *marks = [storedSet(SGKeyLocalFileExplicit) mutableCopy], *clean = [storedSet(SGKeyLocalFileClean) mutableCopy];
+    if (marked) {
+        [marks addObject:uri];
+        [clean removeObject:uri];
+    } else {
+        [marks removeObject:uri];
+        // Its lyrics would mark it again.
+        if (SGLocalFileLyricsVerdictOf(uri) == SGLocalFileLyricsExplicit) [clean addObject:uri];
+    }
+    storeSet(SGKeyLocalFileExplicit, marks);
+    storeSet(SGKeyLocalFileClean, clean);
+    remakeExplicit();
     changed(uri);
+}
+
+SGLocalFileLyricsVerdict SGLocalFileLyricsVerdictOf(NSString *uri) {
+    NSNumber *verdict = uri ? storedVerdicts()[plainURI(uri)] : nil;
+    return verdict ? (SGLocalFileLyricsVerdict)verdict.integerValue : SGLocalFileLyricsUnread;
+}
+
+void SGLocalFileSetLyricsVerdict(NSString *uri, SGLocalFileLyricsVerdict verdict) {
+    if (!SGLocalFileIs(uri)) return;
+    uri = plainURI(uri);
+    if (SGLocalFileLyricsVerdictOf(uri) == verdict) return;
+    BOOL was = SGLocalFileExplicit(uri);
+    NSMutableDictionary *verdicts = [storedVerdicts() mutableCopy];
+    verdicts[uri] = @(verdict);
+    [NSUserDefaults.standardUserDefaults setObject:verdicts forKey:SGKeyLocalFileLyricsVerdicts];
+    remakeExplicit();
+    if (SGLocalFileExplicit(uri) != was) changed(uri);
 }
 
 #pragma mark - storing an edit

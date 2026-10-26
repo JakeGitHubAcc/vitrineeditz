@@ -64,6 +64,11 @@ static __weak UILabel *sg_headerLabel;
 // "Welcome 2 Detroit" by the guests of a song played before it). Each is set again from Spotify's own words once the
 // track is known.
 static NSMapTable<UILabel *, NSString *> *sg_swapped;
+// The credited artists of tracks played before, each with the artist Spotify gives it: the player's artist line can
+// be handed one again for the next track by the same artist (device, 9.1.94: Revival's "Believe" by "Eminem, Beyoncé",
+// the guests of "Walk on Water" before it), copied over from a label set for the last track. Such a line is put back
+// to the artist Spotify gives, credited again for the track now playing.
+static NSMutableDictionary<NSString *, NSString *> *sg_staleArtists;
 // The masks (a fade at each end) on the views around the header's label, taken off while it names an album, which
 // is wider than they let show, and put back after.
 static NSMapTable<CALayer *, CALayer *> *sg_headerMasks;
@@ -104,7 +109,12 @@ static void noteSwap(UILabel *label, NSString *spotifys) {
 }
 
 static NSString *credited(UILabel *label, NSString *text) {
-    if ((!sg_rawTitle && !sg_headerTitle) || !text.length || !NSThread.isMainThread) return nil;
+    if (!text.length || !NSThread.isMainThread) return nil;
+    NSString *spotifys = sg_staleArtists[text];
+    if (spotifys && ![text isEqualToString:sg_shownArtist] && ![spotifys isEqualToString:text] && inPlayerArtist(label)) {
+        return credited(label, spotifys) ?: spotifys;
+    }
+    if (!sg_rawTitle && !sg_headerTitle) return nil;
     if (sg_rawTitle && [text isEqualToString:sg_rawTitle]) {
         noteSwap(label, text);
         return sg_shownTitle;
@@ -205,6 +215,8 @@ static void findHeaderFrom(UIView *close) {
 }
 
 static void rebadgeArtist(UILabel *label);
+static BOOL startsBadged(NSAttributedString *text);
+static NSAttributedString *withoutBadge(NSAttributedString *text);
 
 static void recreditLabels(void) {
     UILabel *header = sg_headerLabel;
@@ -220,7 +232,13 @@ static void recreditLabels(void) {
         if (![scene isKindOfClass:UIWindowScene.class]) continue;
         for (UIWindow *window in ((UIWindowScene *)scene).windows) {
             SGForEachView(window, ^(UIView *view) {
-                if ([view isKindOfClass:UILabel.class] && inPlayerArtist(view)) rebadgeArtist((UILabel *)view);
+                if (![view isKindOfClass:UILabel.class] || !inPlayerArtist(view)) return;
+                UILabel *line = (UILabel *)view;
+                // Another track's credited artists, put back.
+                NSString *text = line.text;
+                if (startsBadged(line.attributedText)) text = withoutBadge(line.attributedText).string;
+                if (text.length && sg_staleArtists[text] && ![text isEqualToString:sg_shownArtist]) setAgain(line, text);
+                rebadgeArtist(line);
             });
         }
     }
@@ -260,6 +278,11 @@ static void creditPlaying(NSString *uri) {
         unwidenHeader();
     }
     sg_headerTitle = album;
+    // The last track's credited artists, known from now on for what they are.
+    if (sg_shownArtist && sg_rawArtist && ![sg_shownArtist isEqualToString:sg_rawArtist]) {
+        if (!sg_staleArtists || sg_staleArtists.count > 64) sg_staleArtists = [NSMutableDictionary dictionary];
+        sg_staleArtists[sg_shownArtist] = sg_rawArtist;
+    }
     NSDictionary *shown = SGLocalFileShown(uri);
     if ([shown[@"credited"] boolValue]) {
         NSDictionary *info = SGLocalFileInfo(uri);
@@ -270,6 +293,8 @@ static void creditPlaying(NSString *uri) {
     } else {
         sg_rawTitle = sg_shownTitle = sg_rawArtist = sg_shownArtist = nil;
     }
+    // This track's own credits are not stale.
+    if (sg_shownArtist) [sg_staleArtists removeObjectForKey:sg_shownArtist];
     if (!sg_headerTitle) showGlyphsAgain();
     recreditLabels();
     artistLinesNow();

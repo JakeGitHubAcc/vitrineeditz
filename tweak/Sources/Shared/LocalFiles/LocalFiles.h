@@ -49,12 +49,30 @@ NSDictionary<NSString *, id> *SGLocalFileEditFor(NSString *uri);
 // file's own goes back to it) and `cover` (nil keeps each one's), written once and named by them all. Main thread.
 void SGLocalFilesSaveAlbum(NSArray<NSString *> *uris, NSString *album, UIImage *cover);
 
-// The files the user marked explicit, which Spotify's local files never are: the player and the lists show the
-// badge for them. Kept as an array of URIs. Read from any thread; set on main, which posts
-// SGLocalFileEditsDidChangeNotification.
+// The files that are explicit, which Spotify's local files never are: the player and the lists show the badge for
+// them. A file is explicit when the user marked it, or when its lyrics have explicit words in them (LocalExplicit.m)
+// and the user has not marked it clean since; taking the mark off a file its lyrics marked marks it clean. Each kept
+// as an array of URIs, the lyrics' verdicts as URI -> SGLocalFileLyricsVerdict. Read from any thread; set on main,
+// which posts SGLocalFileEditsDidChangeNotification.
 #define SGKeyLocalFileExplicit @"spotifyglass.localFiles.explicit"
+#define SGKeyLocalFileClean @"spotifyglass.localFiles.clean"
+#define SGKeyLocalFileLyricsVerdicts @"spotifyglass.localFiles.lyricsVerdicts"
 BOOL SGLocalFileExplicit(NSString *uri);
 void SGLocalFileSetExplicit(NSString *uri, BOOL marked);
+typedef NS_ENUM(NSInteger, SGLocalFileLyricsVerdict) {
+    SGLocalFileLyricsUnread = -2,     // not looked at
+    SGLocalFileLyricsNone = -1,       // no lyrics found
+    SGLocalFileLyricsClean = 0,
+    SGLocalFileLyricsExplicit = 1,
+};
+SGLocalFileLyricsVerdict SGLocalFileLyricsVerdictOf(NSString *uri);
+void SGLocalFileSetLyricsVerdict(NSString *uri, SGLocalFileLyricsVerdict verdict);
+// LocalExplicit.m. Reads the lyrics of each file not yet read, one at a time, and keeps their verdicts; the lyrics
+// of a local file that come in as it plays are read as they come. Main thread.
+void SGLocalFilesCheckLyrics(NSArray<NSString *> *uris);
+// Whether lyrics have explicit words in them: one strong word (the f-word, the n-word and the like), or two milder
+// ones. Any thread.
+BOOL SGLyricsAreExplicit(NSArray<NSString *> *lines);
 
 // Stores the names (an empty or missing one, or one the file already has, falls back to the file's
 // own) and a new cover when `cover` is set; `keepCover` NO drops the stored one. The file's own names
