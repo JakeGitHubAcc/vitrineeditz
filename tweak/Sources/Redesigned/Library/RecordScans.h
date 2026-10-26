@@ -34,6 +34,9 @@ void SGRRecordSleeve(NSString *title, NSString *artist, NSString *kind, UIImage 
 // when there is nothing but a front. Any thread.
 SGRSleeve *SGRSleeveOfArtwork(NSDictionary<NSString *, NSArray<NSString *> *> *artwork, UIImage *cover);
 
+// A spine photographed standing turned to lie along the record's edge, its writing reading left to right. Any thread.
+UIImage *SGRLyingSpine(UIImage *spine);
+
 // The colors a label strip in the cover's colors takes: the cover's most common color, and of the cover's other
 // colors the one that reads best on it, else white or black. Any thread.
 void SGRSpineColors(UIImage *cover, UIColor **back, UIColor **text);

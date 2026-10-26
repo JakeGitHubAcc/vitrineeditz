@@ -358,6 +358,10 @@ static UIImage *lying(UIImage *spine) {
     }];
 }
 
+UIImage *SGRLyingSpine(UIImage *spine) {
+    return spine ? lying(spine) : nil;
+}
+
 // One picture of a gatefold's inside that is the whole spread is cut into its halves.
 static NSArray<UIImage *> *halves(UIImage *spread) {
     CGImageRef image = spread.CGImage;
