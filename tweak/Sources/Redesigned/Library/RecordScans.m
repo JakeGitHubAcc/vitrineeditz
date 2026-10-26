@@ -5,15 +5,31 @@
 // MusicBrainz asks every program to say who it is.
 static NSString *const kUserAgent = @"VitrineEditz/1.0 ( https://github.com/JakeGitHubAcc/vitrineeditz )";
 static const NSTimeInterval kSpacing = 1.1, kAskAgain = 30 * 24 * 3600, kTimeout = 15;
-// The releases whose pictures are asked for, at most, and the search's lowest score taken.
-static const NSUInteger kReleasesTried = 8;
+// The search's lowest score taken, the pressings whose pictures are asked for at most, and how drawn out a picture
+// must be to be a spine.
 static const NSInteger kLowestScore = 90;
+static const NSUInteger kPressingsTried = 4;
+static const CGFloat kSpineLong = 6;
+// How alike a scan's front and the streaming cover must be (sameCover()).
+static const double kSameCover = 0.38;
+// Pressings never taken, by their note.
+static NSString *const kNeverPattern = @"picture|zoetrope|deluxe|expanded|anniversary|bonus|super|box";
+// A picture of the gatefold's inside, by its comment, and not one of the other things inside a sleeve.
+static NSString *const kGatefoldPattern = @"gatefold|inside|inner|interior|open", *const kNotGatefoldPattern = @"sleeve|insert|poster|lyric";
+// The picture kinds in the cache's entries.
+static NSArray<NSString *> *pictureKinds(void) {
+    return @[@"front", @"back", @"spine", @"sticker", @"gatefold1", @"gatefold2"];
+}
 
-typedef void (^SGRScansDone)(UIImage *front, UIImage *spine);
+typedef void (^SGRSleeveDone)(SGRSleeve *sleeve);
+
+@implementation SGRSleeve
+@end
 
 @interface SGRScanJob : NSObject
-@property (nonatomic, copy) NSString *key, *title, *artist;
-@property (nonatomic, strong) NSMutableArray<SGRScansDone> *waiting;
+@property (nonatomic, copy) NSString *key, *title, *artist, *kind;
+@property (nonatomic, strong) UIImage *cover;
+@property (nonatomic, strong) NSMutableArray<SGRSleeveDone> *waiting;
 @end
 
 @implementation SGRScanJob
@@ -37,11 +53,22 @@ static NSString *folder(void) {
 }
 
 static NSString *indexPath(void) {
-    return [folder() stringByAppendingPathComponent:@"scans.plist"];
+    return [folder() stringByAppendingPathComponent:@"sleeves.plist"];
+}
+
+// The first build kept any scan, a CD's too, under scans.plist: what it kept is let go.
+static void forgetFirstScans(void) {
+    NSString *base = folder();
+    if (![NSFileManager.defaultManager fileExistsAtPath:[base stringByAppendingPathComponent:@"scans.plist"]]) return;
+    for (NSString *name in [NSFileManager.defaultManager contentsOfDirectoryAtPath:base error:nil]) {
+        if ([name isEqualToString:@"scans.plist"] || [name hasSuffix:@"-front.jpg"] || [name hasSuffix:@"-spine.jpg"])
+            [NSFileManager.defaultManager removeItemAtPath:[base stringByAppendingPathComponent:name] error:nil];
+    }
 }
 
 static NSMutableDictionary<NSString *, NSDictionary *> *scanIndex(void) {
     if (!sg_index) {
+        forgetFirstScans();
         NSDictionary *saved = [NSDictionary dictionaryWithContentsOfFile:indexPath()];
         sg_index = [saved isKindOfClass:NSDictionary.class] ? [saved mutableCopy] : [NSMutableDictionary dictionary];
     }
@@ -57,16 +84,30 @@ static NSString *fileName(NSString *key, NSString *what) {
     return [NSString stringWithFormat:@"%@-%@.jpg", name, what];
 }
 
-// The pictures a cache entry names, read off main.
-static void loadEntry(NSDictionary *entry, SGRScansDone done) {
-    NSString *front = entry[@"front"], *spine = entry[@"spine"];
+static BOOL entryHasFront(NSDictionary *entry) {
+    return [entry[@"front"] isKindOfClass:NSString.class] && ((NSString *)entry[@"front"]).length;
+}
+
+// The sleeve a cache entry names, read off main.
+static void loadEntry(NSDictionary *entry, SGRSleeveDone done) {
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         NSString *base = folder();
-        UIImage *frontImage = front.length ? [UIImage imageWithContentsOfFile:[base stringByAppendingPathComponent:front]] : nil;
-        UIImage *spineImage = spine.length ? [UIImage imageWithContentsOfFile:[base stringByAppendingPathComponent:spine]] : nil;
-        frontImage = [frontImage imageByPreparingForDisplay] ?: frontImage;
-        spineImage = [spineImage imageByPreparingForDisplay] ?: spineImage;
-        dispatch_async(dispatch_get_main_queue(), ^{ done(frontImage, spineImage); });
+        NSMutableDictionary<NSString *, UIImage *> *pictures = [NSMutableDictionary dictionary];
+        for (NSString *what in pictureKinds()) {
+            NSString *name = [entry[what] isKindOfClass:NSString.class] ? entry[what] : nil;
+            UIImage *picture = name.length ? [UIImage imageWithContentsOfFile:[base stringByAppendingPathComponent:name]] : nil;
+            if (picture) pictures[what] = [picture imageByPreparingForDisplay] ?: picture;
+        }
+        SGRSleeve *sleeve = nil;
+        if (pictures[@"front"]) {
+            sleeve = [SGRSleeve new];
+            sleeve.front = pictures[@"front"];
+            sleeve.back = pictures[@"back"];
+            sleeve.spine = pictures[@"spine"];
+            sleeve.sticker = pictures[@"sticker"];
+            if (pictures[@"gatefold1"] && pictures[@"gatefold2"]) sleeve.gatefold = @[pictures[@"gatefold1"], pictures[@"gatefold2"]];
+        }
+        dispatch_async(dispatch_get_main_queue(), ^{ done(sleeve); });
     });
 }
 
@@ -85,7 +126,15 @@ static void getJSON(NSURL *url, BOOL musicBrainz, void (^done)(NSInteger status,
     }] resume];
 }
 
-// Letters and digits only, lowercased, for telling whether two titles name the same album.
+// MusicBrainz again, no sooner than kSpacing after its last request.
+static void getMusicBrainz(NSURL *url, void (^done)(NSInteger status, id answer)) {
+    NSTimeInterval wait = MAX(0, kSpacing - (CACurrentMediaTime() - sg_lastSearch));
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(wait * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        getJSON(url, YES, done);
+    });
+}
+
+// Letters and digits only, lowercased and without accents, for telling whether two titles are the same.
 static NSString *bare(NSString *text) {
     NSMutableString *out = [NSMutableString string];
     NSCharacterSet *keep = NSCharacterSet.alphanumericCharacterSet;
@@ -119,70 +168,176 @@ static NSString *quoted(NSString *text) {
     return [NSString stringWithFormat:@"\"%@\"", escaped];
 }
 
-// 0 vinyl, 1 CD, 2 anything else on a medium; -1 digital, or no medium said.
-static NSInteger formatRank(NSDictionary *release) {
-    NSInteger best = -1;
-    for (id medium in [release[@"media"] isKindOfClass:NSArray.class] ? release[@"media"] : @[]) {
-        NSString *format = [medium isKindOfClass:NSDictionary.class] && [medium[@"format"] isKindOfClass:NSString.class] ? medium[@"format"] : @"";
-        NSInteger rank = [format containsString:@"Vinyl"] ? 0 : [format containsString:@"CD"] ? 1
-                       : (!format.length || [format containsString:@"Digital"]) ? -1 : 2;
-        if (rank >= 0 && (best < 0 || rank < best)) best = rank;
-    }
-    return best;
+static BOOL matches(NSString *text, NSString *pattern) {
+    return [text isKindOfClass:NSString.class] && [text rangeOfString:pattern options:NSRegularExpressionSearch | NSCaseInsensitiveSearch].location != NSNotFound;
 }
 
-// The search's releases of this album, the vinyl ones first, then the CDs, then the rest.
-static NSArray<NSString *> *candidates(id answer, NSString *title) {
+// The search's terms for Spotify's album_type.
+static NSString *kindTerms(NSString *kind) {
+    if ([kind isEqualToString:@"single"]) return @"(primarytype:single OR primarytype:ep)";
+    if ([kind isEqualToString:@"ep"]) return @"primarytype:ep";
+    if ([kind isEqualToString:@"compilation"]) return @"secondarytype:compilation";
+    return @"primarytype:album";
+}
+
+// The release group of exactly this title among the search's, nil for none.
+static NSString *groupOf(id answer, NSString *title) {
+    NSString *wanted = bare(title);
+    for (id group in [answer isKindOfClass:NSDictionary.class] && [answer[@"release-groups"] isKindOfClass:NSArray.class] ? answer[@"release-groups"] : @[]) {
+        if (![group isKindOfClass:NSDictionary.class] || ![group[@"id"] isKindOfClass:NSString.class]) continue;
+        if ([group[@"score"] integerValue] < kLowestScore) continue;
+        NSString *name = [group[@"title"] isKindOfClass:NSString.class] ? group[@"title"] : @"";
+        if (wanted.length && [bare(name) isEqualToString:wanted]) return group[@"id"];
+    }
+    return nil;
+}
+
+// The group's vinyl pressings worth asking for pictures, best first: official, the group's own title, a front
+// picture, never a picture disc or a deluxe pressing; plain ones before noted ones, then those with a back
+// picture, then the oldest.
+static NSArray<NSString *> *pressings(id answer, NSString *title) {
     NSString *wanted = bare(title);
     NSMutableArray<NSDictionary *> *kept = [NSMutableArray array];
     for (id release in [answer isKindOfClass:NSDictionary.class] && [answer[@"releases"] isKindOfClass:NSArray.class] ? answer[@"releases"] : @[]) {
         if (![release isKindOfClass:NSDictionary.class] || ![release[@"id"] isKindOfClass:NSString.class]) continue;
-        if ([release[@"score"] integerValue] < kLowestScore) continue;
-        NSString *name = bare([release[@"title"] isKindOfClass:NSString.class] ? release[@"title"] : @"");
-        if (!name.length || !wanted.length || !([name containsString:wanted] || [wanted containsString:name])) continue;
-        NSInteger rank = formatRank(release);
-        if (rank < 0) continue;
-        [kept addObject:@{@"id": release[@"id"], @"rank": @(rank), @"order": @(kept.count)}];
+        NSDictionary *art = [release[@"cover-art-archive"] isKindOfClass:NSDictionary.class] ? release[@"cover-art-archive"] : @{};
+        if (![art[@"front"] boolValue]) continue;
+        if ([release[@"status"] isKindOfClass:NSString.class] && ![release[@"status"] isEqualToString:@"Official"]) continue;
+        NSString *name = [release[@"title"] isKindOfClass:NSString.class] ? release[@"title"] : @"";
+        if (![bare(name) isEqualToString:wanted]) continue;
+        NSString *note = [release[@"disambiguation"] isKindOfClass:NSString.class] ? release[@"disambiguation"] : @"";
+        if (matches(note, kNeverPattern)) continue;
+        BOOL vinyl = NO;
+        for (id medium in [release[@"media"] isKindOfClass:NSArray.class] ? release[@"media"] : @[]) {
+            if ([medium isKindOfClass:NSDictionary.class] && matches(medium[@"format"], @"vinyl")) vinyl = YES;
+        }
+        if (!vinyl) continue;
+        NSString *date = [release[@"date"] isKindOfClass:NSString.class] && ((NSString *)release[@"date"]).length ? release[@"date"] : @"9999";
+        [kept addObject:@{@"id": release[@"id"], @"noted": @(note.length > 0), @"back": @(![art[@"back"] boolValue]), @"date": date}];
     }
-    [kept sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
-        NSComparisonResult byRank = [a[@"rank"] compare:b[@"rank"]];
-        return byRank != NSOrderedSame ? byRank : [a[@"order"] compare:b[@"order"]];
-    }];
+    [kept sortUsingDescriptors:@[[NSSortDescriptor sortDescriptorWithKey:@"noted" ascending:YES],
+                                 [NSSortDescriptor sortDescriptorWithKey:@"back" ascending:YES],
+                                 [NSSortDescriptor sortDescriptorWithKey:@"date" ascending:YES]]];
     NSMutableArray<NSString *> *ids = [NSMutableArray array];
     for (NSDictionary *release in kept) {
-        if (ids.count == kReleasesTried) break;
+        if (ids.count == kPressingsTried) break;
         [ids addObject:release[@"id"]];
     }
     return ids;
 }
 
-// The address of a picture of `type` among a release's, the 1200 point copy when there is one.
-static NSString *pictureOf(id answer, NSString *type) {
-    for (id image in [answer isKindOfClass:NSDictionary.class] && [answer[@"images"] isKindOfClass:NSArray.class] ? answer[@"images"] : @[]) {
-        if (![image isKindOfClass:NSDictionary.class] || ![image[@"types"] isKindOfClass:NSArray.class]) continue;
-        if (![image[@"types"] containsObject:type]) continue;
-        NSDictionary *thumbs = [image[@"thumbnails"] isKindOfClass:NSDictionary.class] ? image[@"thumbnails"] : @{};
-        for (NSString *size in @[@"1200", @"large", @"500"]) {
-            if ([thumbs[size] isKindOfClass:NSString.class]) return thumbs[size];
-        }
-        if ([image[@"image"] isKindOfClass:NSString.class]) return image[@"image"];
+static NSString *addressOf(NSDictionary *image) {
+    NSDictionary *thumbs = [image[@"thumbnails"] isKindOfClass:NSDictionary.class] ? image[@"thumbnails"] : @{};
+    for (NSString *size in @[@"1200", @"large"]) {
+        if ([thumbs[size] isKindOfClass:NSString.class]) return thumbs[size];
     }
-    return nil;
+    return [image[@"image"] isKindOfClass:NSString.class] ? image[@"image"] : nil;
 }
 
-// Each release's pictures in turn until there is a front and a spine, or no release left.
-static void lookThrough(NSArray<NSString *> *ids, NSUInteger at, NSMutableDictionary *found, void (^done)(void)) {
-    if (at >= ids.count || (found[@"front"] && found[@"spine"])) {
-        done();
+// What a release's pictures give of the sleeve, as addresses by kind: the front (none, none of the rest either), the
+// back, a spine that is only a spine, a sticker scanned on its own, and the gatefold's inside, a spread or its halves.
+static NSDictionary<NSString *, NSString *> *sleeveIn(id answer) {
+    NSMutableDictionary<NSString *, NSString *> *found = [NSMutableDictionary dictionary];
+    NSMutableArray<NSString *> *inside = [NSMutableArray array];
+    for (id image in [answer isKindOfClass:NSDictionary.class] && [answer[@"images"] isKindOfClass:NSArray.class] ? answer[@"images"] : @[]) {
+        if (![image isKindOfClass:NSDictionary.class] || ![image[@"types"] isKindOfClass:NSArray.class]) continue;
+        NSArray *types = image[@"types"];
+        NSString *address = addressOf(image), *comment = [image[@"comment"] isKindOfClass:NSString.class] ? image[@"comment"] : @"";
+        if (!address) continue;
+        if ([types containsObject:@"Front"]) {
+            if (!found[@"front"]) found[@"front"] = address;
+        } else if ([types containsObject:@"Back"]) {
+            if (!found[@"back"]) found[@"back"] = address;
+        } else if (types.count == 1 && [types containsObject:@"Spine"]) {
+            if (!found[@"spine"]) found[@"spine"] = address;
+        } else if (types.count == 1 && [types containsObject:@"Sticker"]) {
+            if (!found[@"sticker"]) found[@"sticker"] = address;
+        } else if (matches(comment, kGatefoldPattern) && !matches(comment, kNotGatefoldPattern) && ![types containsObject:@"Medium"]) {
+            [inside addObject:address];
+        }
+    }
+    if (!found[@"front"]) return nil;
+    if (inside.count) found[@"gatefold1"] = inside[0];
+    if (inside.count > 1) found[@"gatefold2"] = inside[1];
+    return found;
+}
+
+#pragma mark - telling covers apart
+
+// The picture at 8 by 8, each channel brought to no mean and unit spread, so a scan's light and color cast weigh
+// nothing; NO when it cannot be read.
+static BOOL normalized(UIImage *picture, float out[8 * 8 * 3]) {
+    CGImageRef image = picture.CGImage;
+    if (!image) return NO;
+    enum { kSmall = 8 };
+    uint8_t pixels[kSmall * kSmall * 4];
+    CGColorSpaceRef space = CGColorSpaceCreateDeviceRGB();
+    CGContextRef context = CGBitmapContextCreate(pixels, kSmall, kSmall, 8, kSmall * 4, space, (CGBitmapInfo)kCGImageAlphaNoneSkipLast);
+    CGColorSpaceRelease(space);
+    if (!context) return NO;
+    CGContextSetInterpolationQuality(context, kCGInterpolationMedium);
+    // A scan's edge is often the room around the sleeve: a twentieth off each side.
+    CGFloat inset = kSmall * 0.05;
+    CGContextDrawImage(context, CGRectMake(-inset, -inset, kSmall + 2 * inset, kSmall + 2 * inset), image);
+    CGContextRelease(context);
+    for (int c = 0; c < 3; c++) {
+        double sum = 0, squares = 0;
+        for (int i = 0; i < kSmall * kSmall; i++) sum += pixels[i * 4 + c];
+        double mean = sum / (kSmall * kSmall);
+        for (int i = 0; i < kSmall * kSmall; i++) squares += pow(pixels[i * 4 + c] - mean, 2);
+        double spread = MAX(sqrt(squares / (kSmall * kSmall)), 4);
+        for (int i = 0; i < kSmall * kSmall; i++) out[c * kSmall * kSmall + i] = (float)((pixels[i * 4 + c] - mean) / spread);
+    }
+    return YES;
+}
+
+// Whether a scan shows the same picture as `cover`, the streaming one, allowing for a scan's light and color cast:
+// Dookie's 1994 sleeve scored 0.46 against its cover, its picture disc in its clear sleeve 0.31, and different
+// covers 0.25 at most.
+static BOOL sameCover(UIImage *scan, UIImage *cover) {
+    float a[8 * 8 * 3], b[8 * 8 * 3];
+    if (!normalized(scan, a) || !normalized(cover, b)) return NO;
+    double together = 0;
+    for (int i = 0; i < 8 * 8 * 3; i++) together += a[i] * b[i];
+    return together / (8 * 8 * 3) > kSameCover;
+}
+
+static NSURL *secure(NSString *address) {
+    NSURLComponents *parts = [NSURLComponents componentsWithString:address];
+    // The archive's addresses are often http; the app only loads https.
+    parts.scheme = @"https";
+    return parts.URL ?: [NSURL URLWithString:address];
+}
+
+// Each pressing's pictures in turn until one has a front showing the album's cover (`cover`; any front without it).
+static void lookThrough(NSArray<NSString *> *ids, NSUInteger at, UIImage *cover, void (^done)(NSDictionary<NSString *, NSString *> *found)) {
+    if (at >= ids.count) {
+        done(nil);
         return;
     }
+    void (^next)(void) = ^{ lookThrough(ids, at + 1, cover, done); };
     NSURL *url = [NSURL URLWithString:[@"https://coverartarchive.org/release/" stringByAppendingString:ids[at]]];
     getJSON(url, NO, ^(NSInteger status, id answer) {
-        if (status == 200) {
-            if (!found[@"front"]) found[@"front"] = pictureOf(answer, @"Front");
-            if (!found[@"spine"]) found[@"spine"] = pictureOf(answer, @"Spine");
+        NSDictionary<NSString *, NSString *> *found = status == 200 ? sleeveIn(answer) : nil;
+        if (!found) {
+            next();
+            return;
         }
-        lookThrough(ids, at + 1, found, done);
+        if (!cover) {
+            done(found);
+            return;
+        }
+        [[NSURLSession.sharedSession dataTaskWithURL:secure(found[@"front"]) completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+            UIImage *front = data.length ? [UIImage imageWithData:data] : nil;
+            BOOL same = front && sameCover(front, cover);
+            dispatch_async(dispatch_get_main_queue(), ^{
+                if (same) done(found);
+                else {
+                    SGLog(@"records: a pressing's front is not the album's cover");
+                    next();
+                }
+            });
+        }] resume];
     });
 }
 
@@ -202,30 +357,67 @@ static UIImage *lying(UIImage *spine) {
     }];
 }
 
+// One picture of a gatefold's inside that is the whole spread is cut into its halves.
+static NSArray<UIImage *> *halves(UIImage *spread) {
+    CGImageRef image = spread.CGImage;
+    if (!image) return nil;
+    size_t width = CGImageGetWidth(image), height = CGImageGetHeight(image);
+    CGImageRef left = CGImageCreateWithImageInRect(image, CGRectMake(0, 0, width / 2, height));
+    CGImageRef right = CGImageCreateWithImageInRect(image, CGRectMake(width / 2, 0, width - width / 2, height));
+    NSArray<UIImage *> *both = left && right ? @[[UIImage imageWithCGImage:left], [UIImage imageWithCGImage:right]] : nil;
+    if (left) CGImageRelease(left);
+    if (right) CGImageRelease(right);
+    return both;
+}
+
 // Downloads what was found into the cache, `done` on main with the entry to keep.
-static void download(NSString *key, NSDictionary *found, void (^done)(NSDictionary *entry)) {
+static void download(NSString *key, NSDictionary<NSString *, NSString *> *found, void (^done)(NSDictionary *entry)) {
     dispatch_group_t group = dispatch_group_create();
-    NSMutableDictionary *entry = [@{@"at": NSDate.date, @"front": @"", @"spine": @""} mutableCopy];
-    for (NSString *what in @[@"front", @"spine"]) {
-        NSURL *url = found[what] ? [NSURL URLWithString:found[what]] : nil;
-        if (!url) continue;
-        // Cover Art Archive answers on http too; the app only loads https.
-        NSURLComponents *parts = [NSURLComponents componentsWithURL:url resolvingAgainstBaseURL:NO];
-        parts.scheme = @"https";
+    NSMutableDictionary *entry = [@{@"at": NSDate.date} mutableCopy];
+    NSMutableDictionary<NSString *, UIImage *> *pictures = [NSMutableDictionary dictionary];
+    for (NSString *what in pictureKinds()) {
+        if (!found[what]) continue;
         dispatch_group_enter(group);
-        [[NSURLSession.sharedSession dataTaskWithURL:parts.URL ?: url completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        [[NSURLSession.sharedSession dataTaskWithURL:secure(found[what]) completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
             UIImage *picture = data.length ? [UIImage imageWithData:data] : nil;
-            if ([what isEqualToString:@"spine"]) picture = picture ? lying(picture) : nil;
-            NSData *jpeg = picture ? UIImageJPEGRepresentation(picture, 0.88) : nil;
-            NSString *name = fileName(key, what);
-            BOOL saved = jpeg && [jpeg writeToFile:[folder() stringByAppendingPathComponent:name] atomically:YES];
             dispatch_async(dispatch_get_main_queue(), ^{
-                if (saved) entry[what] = name;
+                if (picture) pictures[what] = picture;
                 dispatch_group_leave(group);
             });
         }] resume];
     }
-    dispatch_group_notify(group, dispatch_get_main_queue(), ^{ done(entry); });
+    dispatch_group_notify(group, dispatch_get_main_queue(), ^{
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+            if (pictures[@"spine"]) {
+                UIImage *spine = lying(pictures[@"spine"]);
+                CGFloat drawn = spine.size.width / MAX(spine.size.height, 1);
+                if (drawn >= kSpineLong) pictures[@"spine"] = spine;
+                else [pictures removeObjectForKey:@"spine"];
+            }
+            // A spread is wider than tall; two halves come as two pictures.
+            UIImage *first = pictures[@"gatefold1"];
+            if (first && !pictures[@"gatefold2"] && first.size.width > first.size.height * 1.5) {
+                NSArray<UIImage *> *both = halves(first);
+                if (both) {
+                    pictures[@"gatefold1"] = both[0];
+                    pictures[@"gatefold2"] = both[1];
+                }
+            }
+            if (!pictures[@"gatefold2"]) [pictures removeObjectForKey:@"gatefold1"];
+            NSMutableDictionary *saved = [NSMutableDictionary dictionary];
+            if (pictures[@"front"]) {
+                for (NSString *what in pictures) {
+                    NSData *jpeg = UIImageJPEGRepresentation(pictures[what], 0.88);
+                    NSString *name = fileName(key, what);
+                    if (jpeg && [jpeg writeToFile:[folder() stringByAppendingPathComponent:name] atomically:YES]) saved[what] = name;
+                }
+            }
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [entry addEntriesFromDictionary:saved];
+                done(entry);
+            });
+        });
+    });
 }
 
 static void pump(void);
@@ -238,12 +430,12 @@ static void finish(SGRScanJob *job, NSDictionary *entry) {
         [sg_failed addObject:job.key];
     }
     [sg_jobs removeObjectForKey:job.key];
-    NSArray<SGRScansDone> *waiting = [job.waiting copy];
-    void (^tell)(UIImage *, UIImage *) = ^(UIImage *front, UIImage *spine) {
-        for (SGRScansDone done in waiting) done(front, spine);
+    NSArray<SGRSleeveDone> *waiting = [job.waiting copy];
+    SGRSleeveDone tell = ^(SGRSleeve *sleeve) {
+        for (SGRSleeveDone done in waiting) done(sleeve);
     };
-    if (entry) loadEntry(entry, tell);
-    else tell(nil, nil);
+    if (entryHasFront(entry)) loadEntry(entry, tell);
+    else tell(nil);
     sg_busy = NO;
     pump();
 }
@@ -251,59 +443,63 @@ static void finish(SGRScanJob *job, NSDictionary *entry) {
 static void run(SGRScanJob *job) {
     NSString *title = plainTitle(job.title);
     NSString *artist = [job.artist componentsSeparatedByString:@", "].firstObject ?: @"";
-    NSString *query = artist.length ? [NSString stringWithFormat:@"release:%@ AND artist:%@", quoted(title), quoted(artist)]
-                                    : [@"release:" stringByAppendingString:quoted(title)];
+    NSMutableString *query = [NSMutableString stringWithFormat:@"releasegroup:%@ AND %@", quoted(title), kindTerms(job.kind)];
+    if (artist.length) [query appendFormat:@" AND artist:%@", quoted(artist)];
     NSString *escaped = [query stringByAddingPercentEncodingWithAllowedCharacters:NSCharacterSet.alphanumericCharacterSet];
-    NSURL *url = [NSURL URLWithString:[@"https://musicbrainz.org/ws/2/release/?fmt=json&limit=50&query=" stringByAppendingString:escaped]];
-    getJSON(url, YES, ^(NSInteger status, id answer) {
+    NSURL *search = [NSURL URLWithString:[@"https://musicbrainz.org/ws/2/release-group/?fmt=json&limit=10&query=" stringByAppendingString:escaped]];
+    getMusicBrainz(search, ^(NSInteger status, id answer) {
         if (status != 200) {
             SGLog(@"records: MusicBrainz answered %ld for a search", (long)status);
             finish(job, nil);
             return;
         }
-        NSArray<NSString *> *ids = candidates(answer, title);
-        NSMutableDictionary *found = [NSMutableDictionary dictionary];
-        lookThrough(ids, 0, found, ^{
-            SGLog(@"records: %lu releases, front %@, spine %@", (unsigned long)ids.count, found[@"front"] ? @"found" : @"none",
-                  found[@"spine"] ? @"found" : @"none");
-            download(job.key, found, ^(NSDictionary *entry) { finish(job, entry); });
+        NSString *group = groupOf(answer, title);
+        if (!group) {
+            finish(job, @{@"at": NSDate.date});
+            return;
+        }
+        NSURL *browse = [NSURL URLWithString:[NSString stringWithFormat:@"https://musicbrainz.org/ws/2/release?release-group=%@&inc=media&fmt=json&limit=100", group]];
+        getMusicBrainz(browse, ^(NSInteger listed, id releases) {
+            if (listed != 200) {
+                SGLog(@"records: MusicBrainz answered %ld for a group's releases", (long)listed);
+                finish(job, nil);
+                return;
+            }
+            NSArray<NSString *> *ids = pressings(releases, title);
+            lookThrough(ids, 0, job.cover, ^(NSDictionary<NSString *, NSString *> *found) {
+                SGLog(@"records: %lu vinyl pressings, sleeve %@", (unsigned long)ids.count, found ? [found.allKeys componentsJoinedByString:@" "] : @"none");
+                if (!found) finish(job, @{@"at": NSDate.date});
+                else download(job.key, found, ^(NSDictionary *entry) { finish(job, entry); });
+            });
         });
     });
 }
 
-// One album at a time, the latest asked for first, a search no sooner than kSpacing after the last.
+// One album at a time, the latest asked for first.
 static void pump(void) {
     if (sg_busy || !sg_queue.count) return;
     sg_busy = YES;
-    NSTimeInterval wait = kSpacing - (CACurrentMediaTime() - sg_lastSearch);
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(MAX(wait, 0) * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        SGRScanJob *job = sg_queue.lastObject;
-        if (!job) {
-            sg_busy = NO;
-            return;
-        }
-        [sg_queue removeLastObject];
-        run(job);
-    });
+    SGRScanJob *job = sg_queue.lastObject;
+    [sg_queue removeLastObject];
+    run(job);
 }
 
-void SGRRecordScans(NSString *title, NSString *artist, void (^done)(UIImage *front, UIImage *spine)) {
+void SGRRecordSleeve(NSString *title, NSString *artist, NSString *kind, UIImage *cover, void (^done)(SGRSleeve *sleeve)) {
     if (!title.length) {
-        done(nil, nil);
+        done(nil);
         return;
     }
-    NSString *key = [NSString stringWithFormat:@"%@\t%@", artist.lowercaseString ?: @"", title.lowercaseString];
+    NSString *key = [NSString stringWithFormat:@"%@\t%@\t%@", artist.lowercaseString ?: @"", title.lowercaseString, kind ?: @"album"];
     NSDictionary *entry = scanIndex()[key];
-    BOOL nothing = entry && !((NSString *)entry[@"front"]).length && !((NSString *)entry[@"spine"]).length;
-    BOOL stale = nothing && -((NSDate *)entry[@"at"]).timeIntervalSinceNow > kAskAgain;
+    BOOL stale = entry && !entryHasFront(entry) && -((NSDate *)entry[@"at"]).timeIntervalSinceNow > kAskAgain;
     if (entry && !stale) {
-        if (nothing) done(nil, nil);
-        else loadEntry(entry, done);
+        if (entryHasFront(entry)) loadEntry(entry, done);
+        else done(nil);
         return;
     }
     if (!sg_failed) sg_failed = [NSMutableSet set];
     if ([sg_failed containsObject:key]) {
-        done(nil, nil);
+        done(nil);
         return;
     }
     if (!sg_jobs) sg_jobs = [NSMutableDictionary dictionary];
@@ -314,13 +510,17 @@ void SGRRecordScans(NSString *title, NSString *artist, void (^done)(UIImage *fro
         job.key = key;
         job.title = title;
         job.artist = artist ?: @"";
+        job.kind = kind ?: @"album";
+        job.cover = cover;
         job.waiting = [NSMutableArray array];
         sg_jobs[key] = job;
-    } else {
+        [sg_queue addObject:job];
+    } else if ([sg_queue containsObject:job]) {
+        // Asked for again: to the front of the line. One already running is not in the queue, and tells this too.
         [sg_queue removeObject:job];
+        [sg_queue addObject:job];
     }
     [job.waiting addObject:[done copy]];
-    [sg_queue addObject:job];
     pump();
 }
 
