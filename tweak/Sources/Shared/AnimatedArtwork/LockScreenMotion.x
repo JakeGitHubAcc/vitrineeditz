@@ -226,6 +226,7 @@ void SGLockMotionAnimatePlaying(void (^done)(NSString *error)) {
         // background defaults write wait for main, which deadlocks launch while main waits on Spotify's CoreThread.
         [NSNotificationCenter.defaultCenter addObserverForName:NSUserDefaultsDidChangeNotification object:nil queue:nil
                                                     usingBlock:^(NSNotification *note) {
+            SGPrefsChanged();
             dispatch_async(dispatch_get_main_queue(), ^{
                 SGLockArtwork choice = SGLockScreenArtwork();
                 NSInteger style = SGInt(SGKeyLockScreenCoverStyle, SGLockCoverMovingBlur);
