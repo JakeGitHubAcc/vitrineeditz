@@ -70,8 +70,13 @@ The server only answers your home network, and devices on your own [Tailscale](h
 network. To animate covers and get them from anywhere:
 
 1. Install Tailscale on the computer and on the iPhone, and sign in to the same account on both.
-2. Start `start.bat` again. It prints a second address, `100.x.y.z:8790`.
-3. On the phone, set **Computer** to that address. It works at home too, so it can stay set.
+2. In Tailscale's admin console, check that **MagicDNS** is on (the DNS page).
+3. Start `start.bat` again. It prints a second address, the computer's Tailscale name, such as `desktop-abc123:8790`.
+4. On the phone, set **Computer** to that address. It works at home too, so it can stay set.
+
+Use the name, not the `100.x.y.z` address: iOS lets Spotify use the server's plain `http://` with a name it counts
+as local (one without dots), but not with a Tailscale address. Safari can open the `100.x.y.z` address, while the
+app says it did not answer.
 
 If the phone can't reach it, allow Python through Windows Firewall on **Public** networks as well. Windows
 may treat Tailscale's connection as public.
