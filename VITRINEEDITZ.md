@@ -21,10 +21,11 @@ Tested on Spotify 9.1.94 under iOS 26, with Redesigned UI on.
   - Each album has a page laid out like Spotify's own album pages, with Play, Shuffle and Edit Info, and a type (Album, Single, EP or Compilation) picked from its ⋯.
   - Albums play from the queue, with the album's name at the top of the player.
   - Open it from the button in Your Library's header, or from **Mod Settings → Local albums**.
-- **Add from Google Drive**: paste a share link to a song, a folder or a .zip.
+- **Add from a Link**: paste a Google Drive or Mega share link to a song, a folder or a .zip, or a direct link to a song or a .zip.
   - FLAC, WAV and AIFF are converted to AAC 256 kbps, with their tags and cover kept.
   - MP3 and M4A are kept as they are.
-  - Open it from **Mod Settings → Add from Google Drive** or the + on Local Albums.
+  - Pictures that come with the songs (front, back or inlay, spine, hype sticker, inside or booklet) are kept for the album and shown on its record in Records.
+  - Open it from **Mod Settings → Add from a link** or the + on Local Albums.
 - **Featured artists credited**: "Song (feat. A & B)" by C shows as "Song" by "C, A, B" in the player, the mini player, the lock screen and Local Albums. The files themselves aren't changed.
 - **Go to Album** in the player's ⋯ menu while a local file plays.
 - **Tap the artist** under a local file in the player for the same sheet a Spotify song gives: each credited artist's real Spotify page (found by name) and the song's local album.
