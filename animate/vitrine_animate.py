@@ -628,12 +628,18 @@ def handler(jobs):
 
 
 def tailscale_address():
-    """This computer's address on the user's Tailscale network, or None without Tailscale."""
+    """This computer's name on the user's Tailscale network (MagicDNS), else its 100.x address; None without
+    Tailscale. The name first: iOS lets an app use plain http with a name without dots, as a local one, but not
+    with a 100.x address, which only Safari reaches."""
     try:
-        out = subprocess.run(["tailscale", "ip", "-4"], capture_output=True, text=True, timeout=5).stdout.split()
-    except (OSError, subprocess.SubprocessError):
+        status = json.loads(subprocess.run(["tailscale", "status", "--json"], capture_output=True, text=True, timeout=5).stdout)
+    except (OSError, subprocess.SubprocessError, ValueError):
         return None
-    return next((a for a in out if a.startswith("100.")), None)
+    me = status.get("Self") or {}
+    name = (me.get("DNSName") or "").split(".")[0]
+    if name and (status.get("CurrentTailnet") or {}).get("MagicDNSEnabled"):
+        return name
+    return next((a for a in me.get("TailscaleIPs") or [] if a.startswith("100.")), None)
 
 
 def lan_address():

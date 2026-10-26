@@ -183,7 +183,7 @@ static void send(NSString *key, NSData *png, void (^done)(NSString *error)) {
                 sg_status[key] = @"Computer not reachable";
                 SGLog(@"animate: %@ not sent (%@)", key, error.localizedDescription ?: @"no answer");
                 if (done) done([NSString stringWithFormat:@"Vitrine Animate did not answer at %@. Check that it is running on "
-                                                          @"your computer and that both are on the same Wi-Fi.", SGAnimatedCoverServer()]);
+                                                          @"your computer and that both are on the same Wi-Fi, or on Tailscale with the computer's name entered rather than its 100.x address.", SGAnimatedCoverServer()]);
                 return;
             }
             SGLog(@"animate: %@ sent, %@", key, answer[@"state"]);
@@ -370,7 +370,7 @@ void SGAnimatedCoverRestore(void (^done)(NSUInteger added, NSString *error)) {
             if (!answer) {
                 sg_restoring = NO;
                 if (done) done(0, [NSString stringWithFormat:@"Vitrine Animate did not answer at %@. Check that it is running on "
-                                                             @"your computer and that both are on the same Wi-Fi.", SGAnimatedCoverServer()]);
+                                                             @"your computer and that both are on the same Wi-Fi, or on Tailscale with the computer's name entered rather than its 100.x address.", SGAnimatedCoverServer()]);
                 return;
             }
             restoreNext(clips, 0, 0, done);
