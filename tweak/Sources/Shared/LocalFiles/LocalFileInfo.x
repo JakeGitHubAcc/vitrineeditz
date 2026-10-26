@@ -59,6 +59,14 @@ static NSString *const kPlayerClose = @"now-playing-minimize-button", *const kPl
 // The album the header names now, nil when none; the header's label; and what Spotify had it say.
 static NSString *sg_headerTitle, *sg_headerWord;
 static __weak UILabel *sg_headerLabel;
+// Every title and artist label given credited names, with the words Spotify gave it: the player may set its labels
+// before the player's state says the track changed, so a label could keep the last track's names (device, 9.1.94:
+// "Welcome 2 Detroit" by the guests of a song played before it). Each is set again from Spotify's own words once the
+// track is known.
+static NSMapTable<UILabel *, NSString *> *sg_swapped;
+// The masks (a fade at each end) on the views around the header's label, taken off while it names an album, which
+// is wider than they let show, and put back after.
+static NSMapTable<CALayer *, CALayer *> *sg_headerMasks;
 // The most a row the header's label shares with the close button can be, in points, and how many views up from
 // the label it is looked for.
 static const CGFloat kHeaderRow = 140;
@@ -90,10 +98,21 @@ static BOOL inPlayerHeader(UILabel *label) {
     return NO;
 }
 
+static void noteSwap(UILabel *label, NSString *spotifys) {
+    if (!sg_swapped) sg_swapped = [NSMapTable weakToStrongObjectsMapTable];
+    [sg_swapped setObject:spotifys forKey:label];
+}
+
 static NSString *credited(UILabel *label, NSString *text) {
     if ((!sg_rawTitle && !sg_headerTitle) || !text.length || !NSThread.isMainThread) return nil;
-    if (sg_rawTitle && [text isEqualToString:sg_rawTitle]) return sg_shownTitle;
-    if (sg_rawArtist && [text isEqualToString:sg_rawArtist] && inPlayerArtist(label)) return sg_shownArtist;
+    if (sg_rawTitle && [text isEqualToString:sg_rawTitle]) {
+        noteSwap(label, text);
+        return sg_shownTitle;
+    }
+    if (sg_rawArtist && [text isEqualToString:sg_rawArtist] && inPlayerArtist(label)) {
+        noteSwap(label, text);
+        return sg_shownArtist;
+    }
     // Once the header's word is known only it is looked at; before, any short line might be the header.
     if (sg_headerTitle && ![text isEqualToString:sg_headerTitle] && (sg_headerWord ? [text isEqualToString:sg_headerWord] : text.length <= 40)
         && inPlayerHeader(label)) {
@@ -116,21 +135,42 @@ static CGRect headerBounds(UILabel *label, CGRect bounds) {
     return bounds;
 }
 
-// Widened now, and nothing around it cutting it off.
+// Widened now, and nothing around it cutting it off: no clipping, and no fade mask, from the label up through the
+// row it sits in (device, 9.1.94: "Call: The M" of a longer name, faded out at both ends). A name longer than the
+// room between the buttons is made smaller to fit.
 static void widenHeader(UILabel *label) {
     if (label != sg_headerLabel || !sg_headerTitle) return;
+    label.adjustsFontSizeToFitWidth = YES;
+    label.minimumScaleFactor = 0.7;
     CGRect wide = headerBounds(label, label.bounds);
-    if (wide.size.width <= label.bounds.size.width) return;
-    label.bounds = wide;
-    UIView *up = label.superview;
-    for (NSUInteger i = 0; up && i < 2; i++, up = up.superview) {
-        if (up.clipsToBounds && up.bounds.size.width < wide.size.width) up.clipsToBounds = NO;
+    if (!sg_headerMasks) sg_headerMasks = [NSMapTable weakToStrongObjectsMapTable];
+    UIView *up = label;
+    for (NSUInteger i = 0; up && i < 4; i++, up = up.superview) {
+        if (up.layer.mask) {
+            [sg_headerMasks setObject:up.layer.mask forKey:up.layer];
+            up.layer.mask = nil;
+        }
+        if (up != label && up.clipsToBounds && up.bounds.size.width < wide.size.width) up.clipsToBounds = NO;
     }
+    if (wide.size.width > label.bounds.size.width) label.bounds = wide;
+}
+
+// The fades put back once the header says Spotify's own word again.
+static void unwidenHeader(void) {
+    for (CALayer *layer in sg_headerMasks.keyEnumerator.allObjects) {
+        if (!layer.mask) layer.mask = [sg_headerMasks objectForKey:layer];
+    }
+    [sg_headerMasks removeAllObjects];
 }
 
 static void setAgain(UILabel *label, NSString *text) {
-    if (label.attributedText.length) {
-        NSMutableAttributedString *again = [label.attributedText mutableCopy];
+    NSAttributedString *current = label.attributedText;
+    // Past the explicit badge, whose attributes are a picture's.
+    if (current.length >= 2 && [current attribute:NSAttachmentAttributeName atIndex:0 effectiveRange:NULL]) {
+        current = [current attributedSubstringFromRange:NSMakeRange(2, current.length - 2)];
+    }
+    if (current.length) {
+        NSMutableAttributedString *again = [current mutableCopy];
         [again replaceCharactersInRange:NSMakeRange(0, again.length) withString:text];
         label.attributedText = again;
     } else {
@@ -164,9 +204,26 @@ static void findHeaderFrom(UIView *close) {
     }
 }
 
+static void rebadgeArtist(UILabel *label);
+
 static void recreditLabels(void) {
     UILabel *header = sg_headerLabel;
     if (header && !sg_headerTitle && sg_headerWord && ![header.text isEqualToString:sg_headerWord]) setAgain(header, sg_headerWord);
+    // Labels given another track's names, set again from Spotify's words: credited for this track, or as they were.
+    for (UILabel *label in sg_swapped.keyEnumerator.allObjects) {
+        NSString *spotifys = [sg_swapped objectForKey:label];
+        [sg_swapped removeObjectForKey:label];
+        if (label.window && spotifys.length) setAgain(label, spotifys);
+    }
+    // The player's artist line with or without the explicit badge, as the track now is.
+    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+        if (![scene isKindOfClass:UIWindowScene.class]) continue;
+        for (UIWindow *window in ((UIWindowScene *)scene).windows) {
+            SGForEachView(window, ^(UIView *view) {
+                if ([view isKindOfClass:UILabel.class] && inPlayerArtist(view)) rebadgeArtist((UILabel *)view);
+            });
+        }
+    }
     if (!sg_rawTitle && !sg_headerTitle) return;
     for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
         if (![scene isKindOfClass:UIWindowScene.class]) continue;
@@ -200,6 +257,7 @@ static void creditPlaying(NSString *uri) {
             sg_headerTitle = nil;
             setAgain(header, sg_headerWord);
         }
+        unwidenHeader();
     }
     sg_headerTitle = album;
     NSDictionary *shown = SGLocalFileShown(uri);
@@ -215,10 +273,14 @@ static void creditPlaying(NSString *uri) {
     if (!sg_headerTitle) showGlyphsAgain();
     recreditLabels();
     artistLinesNow();
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.4 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        recreditLabels();
-        artistLinesNow();
-    });
+    // Again once the player has laid out its new track, and again after: the queue glyph and the labels are set
+    // over a few passes.
+    for (NSNumber *later in @[@0.4, @1.2]) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(later.doubleValue * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            recreditLabels();
+            artistLinesNow();
+        });
+    }
 }
 
 void SGLocalFilesRecredit(void) {
@@ -286,7 +348,7 @@ static void hideQueueGlyph(UIView *line) {
         sg_movedLines = [NSHashTable weakObjectsHashTable];
     }
     UIView *level = line;
-    for (NSUInteger i = 0; level.superview && i < 2; i++, level = level.superview) {
+    for (NSUInteger i = 0; level.superview && i < 3; i++, level = level.superview) {
         CGFloat start = leftOf(level);
         UIView *glyph = nil;
         for (UIView *sub in level.superview.subviews) {
@@ -366,6 +428,80 @@ static void artistLineSet(UILabel *label) {
     }
 }
 
+#pragma mark - the explicit badge
+
+// A local file marked explicit has the badge on the player's artist line at once, drawn into the line's text before
+// the artist, as Spotify draws its own: an E on a light square. Spotify's own shows only once it builds the track
+// again; while it does, this one is left off.
+static char kBadgedKey;
+
+static BOOL spotifyBadgeShown(UIView *label) {
+    UIView *line = label;
+    for (NSUInteger i = 0; line && i < 4 && ![line.accessibilityIdentifier isEqualToString:kPlayerArtist]; i++) line = line.superview;
+    UIView *level = line ?: label;
+    for (NSUInteger i = 0; level.superview && i < 3; i++, level = level.superview) {
+        for (UIView *sub in level.superview.subviews) {
+            if (sub == level || sub.hidden || sub.alpha < 0.01) continue;
+            if (sub.bounds.size.width > kGlyphLargest || sub.bounds.size.height > kGlyphLargest) continue;
+            __block BOOL badge = NO;
+            SGForEachView(sub, ^(UIView *view) {
+                if (!badge && [view isKindOfClass:UILabel.class] && [((UILabel *)view).text isEqualToString:@"E"]) badge = YES;
+            });
+            if (badge) return YES;
+        }
+    }
+    return NO;
+}
+
+static BOOL wantsBadge(UILabel *label) {
+    return sg_playingLocal && SGLocalFileExplicit(sg_playingLocal) && inPlayerArtist(label) && !spotifyBadgeShown(label);
+}
+
+static UIImage *badgeImage(UIFont *font, UIColor *color) {
+    CGFloat side = ceil(font.capHeight * 1.3);
+    UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:CGSizeMake(side, side)];
+    return [renderer imageWithActions:^(UIGraphicsImageRendererContext *context) {
+        [[color colorWithAlphaComponent:0.75] setFill];
+        [[UIBezierPath bezierPathWithRoundedRect:CGRectMake(0, 0, side, side) cornerRadius:2] fill];
+        NSDictionary *letter = @{NSFontAttributeName: [UIFont systemFontOfSize:side * 0.7 weight:UIFontWeightBold], NSForegroundColorAttributeName: UIColor.blackColor};
+        CGSize size = [@"E" sizeWithAttributes:letter];
+        // Cut out of the square, as Spotify's is.
+        CGContextSetBlendMode(context.CGContext, kCGBlendModeDestinationOut);
+        [@"E" drawAtPoint:CGPointMake((side - size.width) / 2, (side - size.height) / 2) withAttributes:letter];
+    }];
+}
+
+static BOOL startsBadged(NSAttributedString *text) {
+    return text.length >= 2 && [text attribute:NSAttachmentAttributeName atIndex:0 effectiveRange:NULL] != nil;
+}
+
+static NSAttributedString *withBadge(NSAttributedString *text, UILabel *label) {
+    NSDictionary *words = text.length ? [text attributesAtIndex:0 effectiveRange:NULL] : @{};
+    UIFont *font = words[NSFontAttributeName] ?: label.font;
+    UIColor *color = words[NSForegroundColorAttributeName] ?: label.textColor ?: UIColor.whiteColor;
+    NSTextAttachment *badge = [NSTextAttachment new];
+    badge.image = badgeImage(font, color);
+    CGFloat side = badge.image.size.width;
+    badge.bounds = CGRectMake(0, round((font.capHeight - side) / 2), side, side);
+    NSMutableAttributedString *badged = [[NSAttributedString attributedStringWithAttachment:badge] mutableCopy];
+    [badged appendAttributedString:[[NSAttributedString alloc] initWithString:@" " attributes:words]];
+    [badged appendAttributedString:text];
+    return badged;
+}
+
+static NSAttributedString *withoutBadge(NSAttributedString *text) {
+    return startsBadged(text) ? [text attributedSubstringFromRange:NSMakeRange(2, text.length - 2)] : text;
+}
+
+// The artist line's text set again, so it gains or loses the badge as the track now is.
+static void rebadgeArtist(UILabel *label) {
+    NSAttributedString *text = label.attributedText;
+    BOOL ours = [objc_getAssociatedObject(label, &kBadgedKey) boolValue];
+    if (!text.length || (!ours && !wantsBadge(label))) return;
+    if (ours == wantsBadge(label) && ours == startsBadged(text)) return;
+    label.attributedText = ours ? withoutBadge(text) : text;
+}
+
 #pragma mark - the system's now playing artwork
 
 @interface SGLocalFileNowPlaying : NSObject <SGPlayerStateObserver>
@@ -421,21 +557,40 @@ static void artistLineSet(UILabel *label) {
 %hook UILabel
 - (void)setText:(NSString *)text {
     artistLineSet(self);
+    if (NSThread.isMainThread && sg_swapped) [sg_swapped removeObjectForKey:self];
+    // The badge goes into the text, which takes attributes.
+    if (text.length && NSThread.isMainThread && wantsBadge(self)) {
+        UIColor *color = self.textColor ?: UIColor.whiteColor;
+        [self setAttributedText:[[NSAttributedString alloc] initWithString:text attributes:@{NSFontAttributeName: self.font, NSForegroundColorAttributeName: color}]];
+        return;
+    }
+    if (NSThread.isMainThread) objc_setAssociatedObject(self, &kBadgedKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     %orig(credited(self, text) ?: text);
     widenHeader(self);
 }
 
 - (void)setAttributedText:(NSAttributedString *)text {
     artistLineSet(self);
-    NSString *swap = credited(self, text.string);
-    if (!swap) {
+    if (!NSThread.isMainThread) {
         %orig;
         return;
     }
-    // The new words in the attributes the old ones had.
-    NSMutableAttributedString *changed = [text mutableCopy];
-    [changed replaceCharactersInRange:NSMakeRange(0, changed.length) withString:swap];
-    %orig(changed);
+    if (sg_swapped) [sg_swapped removeObjectForKey:self];
+    BOOL ours = [objc_getAssociatedObject(self, &kBadgedKey) boolValue];
+    NSAttributedString *words = ours ? withoutBadge(text) : text;
+    NSString *swap = credited(self, words.string);
+    NSAttributedString *shown = words;
+    if (swap) {
+        // The new words in the attributes the old ones had.
+        NSMutableAttributedString *changed = [words mutableCopy];
+        [changed replaceCharactersInRange:NSMakeRange(0, changed.length) withString:swap];
+        shown = changed;
+    }
+    BOOL badge = shown.length && wantsBadge(self);
+    objc_setAssociatedObject(self, &kBadgedKey, badge ? @YES : nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if (badge) shown = withBadge(shown, self);
+    if (shown == text) %orig;
+    else %orig(shown);
     widenHeader(self);
 }
 
@@ -451,6 +606,20 @@ static void artistLineSet(UILabel *label) {
         frame = CGRectInset(frame, -(wide.size.width - frame.size.width) / 2, 0);
     }
     %orig(frame);
+}
+%end
+
+// The queue glyph hidden while a local album plays stays hidden whatever the player sets, and what follows it on the
+// line stays where it was moved.
+%hook UIView
+- (void)setAlpha:(CGFloat)alpha {
+    if (sg_headerTitle && sg_hiddenGlyphs.count && [sg_hiddenGlyphs containsObject:self]) alpha = 0;
+    %orig(alpha);
+}
+
+- (void)setHidden:(BOOL)hidden {
+    %orig;
+    if (!hidden && sg_headerTitle && sg_hiddenGlyphs.count && [sg_hiddenGlyphs containsObject:self] && self.alpha != 0) self.alpha = 0;
 }
 %end
 
