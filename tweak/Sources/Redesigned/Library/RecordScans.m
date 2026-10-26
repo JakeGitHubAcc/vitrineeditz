@@ -777,7 +777,229 @@ void SGRRecordSleeve(NSString *title, NSString *artist, NSString *kind, UIImage 
     pump();
 }
 
+#pragma mark - artists and their side projects
+
+NSNotificationName const SGRArtistFamiliesDidChangeNotification = @"spotifyglass.records.artistFamiliesDidChange";
+
+static NSString *artistsPath(void) {
+    return [folder() stringByAppendingPathComponent:@"artists.plist"];
+}
+
+// By the artist's name, lowercased: {people: [ids]}, empty for one not found.
+static NSMutableDictionary<NSString *, NSDictionary *> *artistIndex(void) {
+    static NSMutableDictionary *index;
+    if (!index) {
+        NSDictionary *saved = [NSDictionary dictionaryWithContentsOfFile:artistsPath()];
+        index = [saved isKindOfClass:NSDictionary.class] ? [saved mutableCopy] : [NSMutableDictionary dictionary];
+    }
+    return index;
+}
+
+static NSMutableArray<NSString *> *sg_artistQueue;
+static NSMutableSet<NSString *> *sg_artistsAsked;
+static BOOL sg_artistBusy;
+static NSUInteger sg_artistsSinceNote;
+
+NSSet<NSString *> *SGRArtistPeople(NSString *artist) {
+    NSDictionary *entry = artist.length ? artistIndex()[artist.lowercaseString] : nil;
+    if (!entry) return nil;
+    NSArray *people = [entry[@"people"] isKindOfClass:NSArray.class] ? entry[@"people"] : @[];
+    return [NSSet setWithArray:people];
+}
+
+static void noteArtists(BOOL now) {
+    if (!now && ++sg_artistsSinceNote < 4) return;
+    sg_artistsSinceNote = 0;
+    [artistIndex() writeToFile:artistsPath() atomically:YES];
+    [NSNotificationCenter.defaultCenter postNotificationName:SGRArtistFamiliesDidChangeNotification object:nil];
+}
+
+static void nextArtist(void);
+
+static void keepArtist(NSString *name, NSArray<NSString *> *people) {
+    artistIndex()[name.lowercaseString] = @{@"people": people ?: @[]};
+    sg_artistBusy = NO;
+    noteArtists(sg_artistQueue.count == 0);
+    nextArtist();
+}
+
+// The artist of exactly this name among the search's, its id and whether it is a group; nil for none.
+static NSDictionary *artistOf(id answer, NSString *name) {
+    NSString *wanted = bare(name);
+    for (id artist in [answer isKindOfClass:NSDictionary.class] && [answer[@"artists"] isKindOfClass:NSArray.class] ? answer[@"artists"] : @[]) {
+        if (![artist isKindOfClass:NSDictionary.class] || ![artist[@"id"] isKindOfClass:NSString.class]) continue;
+        if ([artist[@"score"] integerValue] < kLowestScore) continue;
+        NSString *found = [artist[@"name"] isKindOfClass:NSString.class] ? artist[@"name"] : @"";
+        if (wanted.length && [bare(found) isEqualToString:wanted]) return artist;
+    }
+    return nil;
+}
+
+static void nextArtist(void) {
+    // The sleeves go first: they are what is on screen.
+    if (sg_artistBusy || !sg_artistQueue.count) return;
+    if (sg_busy) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ nextArtist(); });
+        return;
+    }
+    sg_artistBusy = YES;
+    NSString *name = sg_artistQueue.firstObject;
+    [sg_artistQueue removeObjectAtIndex:0];
+    NSString *query = [[@"artist:" stringByAppendingString:quoted(name)] stringByAddingPercentEncodingWithAllowedCharacters:NSCharacterSet.alphanumericCharacterSet];
+    getMusicBrainz([NSURL URLWithString:[@"https://musicbrainz.org/ws/2/artist/?fmt=json&limit=5&query=" stringByAppendingString:query]], ^(NSInteger status, id answer) {
+        if (status != 200) {
+            sg_artistBusy = NO;
+            nextArtist();
+            return;
+        }
+        NSDictionary *artist = artistOf(answer, name);
+        if (!artist) {
+            keepArtist(name, @[]);
+            return;
+        }
+        NSString *identifier = artist[@"id"];
+        BOOL group = [artist[@"type"] isEqual:@"Group"];
+        if (!group) {
+            keepArtist(name, @[identifier]);
+            return;
+        }
+        NSURL *lookup = [NSURL URLWithString:[NSString stringWithFormat:@"https://musicbrainz.org/ws/2/artist/%@?inc=artist-rels&fmt=json", identifier]];
+        getMusicBrainz(lookup, ^(NSInteger found, id band) {
+            if (found != 200) {
+                sg_artistBusy = NO;
+                nextArtist();
+                return;
+            }
+            NSMutableArray<NSString *> *members = [NSMutableArray array];
+            for (id relation in [band isKindOfClass:NSDictionary.class] && [band[@"relations"] isKindOfClass:NSArray.class] ? band[@"relations"] : @[]) {
+                if (![relation isKindOfClass:NSDictionary.class] || ![relation[@"type"] isEqual:@"member of band"]) continue;
+                NSDictionary *member = [relation[@"artist"] isKindOfClass:NSDictionary.class] ? relation[@"artist"] : nil;
+                if ([member[@"id"] isKindOfClass:NSString.class]) [members addObject:member[@"id"]];
+            }
+            keepArtist(name, members);
+        });
+    });
+}
+
+void SGRLookUpArtists(NSArray<NSString *> *artists) {
+    if (!sg_artistQueue) {
+        sg_artistQueue = [NSMutableArray array];
+        sg_artistsAsked = [NSMutableSet set];
+    }
+    for (NSString *artist in artists) {
+        NSString *key = artist.lowercaseString;
+        if (!key.length || artistIndex()[key] || [sg_artistsAsked containsObject:key]) continue;
+        [sg_artistsAsked addObject:key];
+        [sg_artistQueue addObject:artist];
+    }
+    nextArtist();
+}
+
+#pragma mark - about the album
+
+static NSString *aboutPath(void) {
+    return [folder() stringByAppendingPathComponent:@"about.plist"];
+}
+
+static NSMutableDictionary<NSString *, NSDictionary *> *aboutIndex(void) {
+    static NSMutableDictionary *index;
+    if (!index) {
+        NSDictionary *saved = [NSDictionary dictionaryWithContentsOfFile:aboutPath()];
+        index = [saved isKindOfClass:NSDictionary.class] ? [saved mutableCopy] : [NSMutableDictionary dictionary];
+    }
+    return index;
+}
+
+static void keepAbout(NSString *key, NSString *text) {
+    aboutIndex()[key] = @{@"text": text ?: @"", @"at": NSDate.date};
+    [aboutIndex() writeToFile:aboutPath() atomically:YES];
+}
+
+void SGRAlbumAbout(NSString *title, NSString *artist, void (^done)(NSString *about)) {
+    NSString *plain = plainTitle(title ?: @"");
+    NSString *lead = [artist componentsSeparatedByString:@", "].firstObject ?: @"";
+    NSString *key = [NSString stringWithFormat:@"%@\t%@", lead.lowercaseString, plain.lowercaseString];
+    NSDictionary *kept = aboutIndex()[key];
+    if (kept && (((NSString *)kept[@"text"]).length || -((NSDate *)kept[@"at"]).timeIntervalSinceNow < kAskAgain)) {
+        NSString *text = kept[@"text"];
+        done(text.length ? text : nil);
+        return;
+    }
+    if (!plain.length) {
+        done(nil);
+        return;
+    }
+    NSString *search = [NSString stringWithFormat:@"%@ %@ album", plain, lead];
+    NSURL *url = [NSURL URLWithString:[@"https://en.wikipedia.org/w/api.php?action=query&list=search&format=json&srlimit=5&srsearch="
+                                       stringByAppendingString:[search stringByAddingPercentEncodingWithAllowedCharacters:NSCharacterSet.alphanumericCharacterSet]]];
+    getJSONWith(url, nil, ^(NSInteger status, id answer) {
+        NSString *page = nil, *wanted = bare(plain);
+        id results = [answer isKindOfClass:NSDictionary.class] ? answer[@"query"][@"search"] : nil;
+        for (id result in [results isKindOfClass:NSArray.class] ? results : @[]) {
+            NSString *name = [result isKindOfClass:NSDictionary.class] && [result[@"title"] isKindOfClass:NSString.class] ? result[@"title"] : nil;
+            // "Dookie", "Encore (Eminem album)": the album's title before any note in brackets.
+            NSString *before = [name componentsSeparatedByString:@" ("].firstObject;
+            if (before && wanted.length && [bare(before) isEqualToString:wanted]) {
+                page = name;
+                break;
+            }
+        }
+        if (!page) {
+            if (status == 200) keepAbout(key, nil);
+            done(nil);
+            return;
+        }
+        NSString *path = [[page stringByReplacingOccurrencesOfString:@" " withString:@"_"]
+                          stringByAddingPercentEncodingWithAllowedCharacters:NSCharacterSet.URLPathAllowedCharacterSet];
+        NSURL *summary = [NSURL URLWithString:[@"https://en.wikipedia.org/api/rest_v1/page/summary/" stringByAppendingString:[path stringByReplacingOccurrencesOfString:@"/" withString:@"%2F"]]];
+        getJSONWith(summary, nil, ^(NSInteger got, id body) {
+            NSString *text = [body isKindOfClass:NSDictionary.class] && [body[@"extract"] isKindOfClass:NSString.class] ? body[@"extract"] : nil;
+            // Only the page about this artist's album.
+            if (text && lead.length && ![bare(text) containsString:bare(lead)]) text = nil;
+            if (got == 200) keepAbout(key, text);
+            done(text.length ? text : nil);
+        });
+    });
+}
+
 #pragma mark - colors
+
+UIColor *SGRProminentColor(UIImage *cover) {
+    CGImageRef image = cover.CGImage;
+    if (!image) return UIColor.blackColor;
+    enum { kSmall = 24 };
+    uint8_t pixels[kSmall * kSmall * 4];
+    CGColorSpaceRef space = CGColorSpaceCreateDeviceRGB();
+    CGContextRef context = CGBitmapContextCreate(pixels, kSmall, kSmall, 8, kSmall * 4, space, (CGBitmapInfo)kCGImageAlphaNoneSkipLast);
+    CGColorSpaceRelease(space);
+    if (!context) return UIColor.blackColor;
+    CGContextDrawImage(context, CGRectMake(0, 0, kSmall, kSmall), image);
+    CGContextRelease(context);
+    // Buckets of 32 levels a channel.
+    double weight[512] = {0}, sum[512][3];
+    memset(sum, 0, sizeof sum);
+    for (int i = 0; i < kSmall * kSmall; i++) {
+        uint8_t *p = pixels + i * 4;
+        int bucket = (p[0] >> 5) << 6 | (p[1] >> 5) << 3 | (p[2] >> 5);
+        weight[bucket] += 1;
+        for (int c = 0; c < 3; c++) sum[bucket][c] += p[c];
+    }
+    int best = -1;
+    double bestScore = 0;
+    for (int b = 0; b < 512; b++) {
+        if (weight[b] < kSmall * kSmall * 0.015) continue;
+        CGFloat r = sum[b][0] / weight[b] / 255, g = sum[b][1] / weight[b] / 255, u = sum[b][2] / weight[b] / 255;
+        CGFloat hue, saturation, brightness, alpha;
+        [[UIColor colorWithRed:r green:g blue:u alpha:1] getHue:&hue saturation:&saturation brightness:&brightness alpha:&alpha];
+        double score = weight[b] * (saturation * saturation + 0.02) * (brightness > 0.15 ? 1 : 0.1);
+        if (score > bestScore) {
+            bestScore = score;
+            best = b;
+        }
+    }
+    if (best < 0) return UIColor.blackColor;
+    return [UIColor colorWithRed:sum[best][0] / weight[best] / 255 green:sum[best][1] / weight[best] / 255 blue:sum[best][2] / weight[best] / 255 alpha:1];
+}
 
 static CGFloat luminance(CGFloat r, CGFloat g, CGFloat b) {
     CGFloat (^linear)(CGFloat) = ^CGFloat(CGFloat c) { return c <= 0.03928 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4); };

@@ -22,5 +22,9 @@ void SGRSetCustomStickerCenter(NSString *record, CGPoint center);
 // The sticker taken off, whatever the sleeve has.
 BOOL SGRCustomStickerHidden(NSString *record);
 void SGRSetCustomStickerHidden(NSString *record, BOOL hidden);
+// The color the record itself is pressed in: "black", "cover" (the album's most vivid color), or "#RRGGBB"; nil for
+// the page's default.
+NSString *SGRCustomVinyl(NSString *record);
+void SGRSetCustomVinyl(NSString *record, NSString *vinyl);
 // Everything picked for the record forgotten.
 void SGRForgetCustom(NSString *record);

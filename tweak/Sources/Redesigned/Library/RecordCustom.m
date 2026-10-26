@@ -40,7 +40,7 @@ static void changeEntry(NSString *record, void (^change)(NSMutableDictionary *en
     NSMutableDictionary *entry = [list()[record] mutableCopy] ?: [NSMutableDictionary dictionary];
     change(entry);
     NSDictionary *parts = entry[@"parts"];
-    BOOL empty = ![parts count] && !entry[@"stickerX"] && ![entry[@"stickerHidden"] boolValue];
+    BOOL empty = ![parts count] && !entry[@"stickerX"] && ![entry[@"stickerHidden"] boolValue] && !entry[@"vinyl"];
     if (empty) [list() removeObjectForKey:record];
     else list()[record] = entry;
     [list() writeToFile:listPath() atomically:YES];
@@ -104,6 +104,15 @@ void SGRSetCustomStickerHidden(NSString *record, BOOL hidden) {
         if (hidden) entry[@"stickerHidden"] = @YES;
         else [entry removeObjectForKey:@"stickerHidden"];
     });
+}
+
+NSString *SGRCustomVinyl(NSString *record) {
+    id vinyl = list()[record][@"vinyl"];
+    return [vinyl isKindOfClass:NSString.class] ? vinyl : nil;
+}
+
+void SGRSetCustomVinyl(NSString *record, NSString *vinyl) {
+    changeEntry(record, ^(NSMutableDictionary *entry) { entry[@"vinyl"] = vinyl; });
 }
 
 void SGRForgetCustom(NSString *record) {
