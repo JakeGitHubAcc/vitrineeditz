@@ -563,7 +563,8 @@ static void rebadgeArtist(UILabel *label) {
 }
 
 - (void)editsChanged:(NSNotification *)note {
-    if ([note.object isEqual:_track]) [self show:SGPlayerState()];
+    // The playing file, under whatever spelling of its URI the edit named it.
+    if ([note.object isEqual:_track] || SGLocalFileIs(_track)) [self show:SGPlayerState()];
     creditPlaying(_track);
 }
 

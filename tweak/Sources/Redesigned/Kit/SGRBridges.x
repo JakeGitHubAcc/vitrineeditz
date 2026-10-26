@@ -328,7 +328,8 @@ void SGRObservePlayerTransition(id owner, void (^began)(id owner), void (^ended)
     // track is looked at again. Posted on the main thread.
     [NSNotificationCenter.defaultCenter addObserverForName:SGLocalFileEditsDidChangeNotification object:nil queue:nil
                                                 usingBlock:^(NSNotification *note) {
-        if (![note.object isEqual:sg_wantedURI]) return;
+        // The edit may name the file by another spelling of its URI than the player's (an album's page made it).
+        if (![note.object isEqual:sg_wantedURI] && !SGLocalFileIs(sg_wantedURI)) return;
         sg_wantedURI = nil;
         followPlayer();
     }];

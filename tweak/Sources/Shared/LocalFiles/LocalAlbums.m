@@ -443,14 +443,15 @@ void SGLocalAlbumCover(SGLocalAlbum *album, CGFloat side, void (^done)(UIImage *
     static NSCache<NSString *, UIImage *> *covers;
     static dispatch_once_t once;
     dispatch_once(&once, ^{ covers = [NSCache new]; covers.countLimit = 120; });
-    NSString *cacheKey = [NSString stringWithFormat:@"%@#%.0f#%@", album.key, side, album.tracks.firstObject.uri];
-    UIImage *kept = [covers objectForKey:cacheKey];
-    if (kept) { done(kept); return; }
     NSString *picked = nil;
     for (SGLocalTrack *track in album.tracks) {
         picked = SGLocalFileCoverPath(SGLocalFileEditFor(track.uri));
         if (picked) break;
     }
+    // A cover picked is a file of its own, named afresh each time: a new one is a new key.
+    NSString *cacheKey = [NSString stringWithFormat:@"%@#%.0f#%@#%@", album.key, side, album.tracks.firstObject.uri, picked.lastPathComponent ?: @""];
+    UIImage *kept = [covers objectForKey:cacheKey];
+    if (kept) { done(kept); return; }
     NSArray<SGLocalTrack *> *tracks = album.tracks;
     dispatch_async(scanQueue(), ^{
         UIImage *cover = picked ? [UIImage imageWithContentsOfFile:picked] : nil;
