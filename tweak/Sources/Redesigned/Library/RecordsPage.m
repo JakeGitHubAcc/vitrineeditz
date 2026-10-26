@@ -9,8 +9,8 @@
 // A tap on a record pulls it out: it lifts out and stands up in the middle, over the crate dimmed, its title and
 // artist under it, as a sleeve: its front, its back, and its edges. Dragging across it turns it over; a gatefold
 // sleeve has Open Gatefold under it, which swings the front open on its left edge to show the inside. A tap on it
-// opens its album, pushed onto the tab's stack over the crate (the record still out on the way back); a tap anywhere
-// else puts it back.
+// slides the record out of the sleeve's open edge and opens its album, pushed onto the tab's stack over the crate
+// (the record back in its sleeve, still out of the crate, on the way back); a tap anywhere else puts it back.
 //
 // A local album wears the pictures that came with its songs when it was imported from a link (DriveImport.h): its
 // front, back, spine, sticker and inside, as a scanned sleeve is worn. Else, with Vinyl Scans on (the menu), a record
@@ -100,6 +100,8 @@ typedef NS_ENUM(NSInteger, SGRRecordsShow) {
 @property (nonatomic, copy) NSString *picture;
 // Spotify's album_type: album, single, ep or compilation.
 @property (nonatomic, copy) NSString *kind;
+// The track names the saved albums' answer gave with the album (its first 50), for a back drawn without a scan.
+@property (nonatomic, copy) NSArray<NSString *> *trackNames;
 @property (nonatomic, strong) SGLocalAlbum *local;
 @property (nonatomic, strong) NSDate *added;
 // What tells it apart from every other record: its URI, or a local album's names.
@@ -141,6 +143,12 @@ static SGRRecord *recordOfSaved(id item) {
     id first = [images isKindOfClass:NSArray.class] ? [images firstObject] : nil;
     if ([first isKindOfClass:NSDictionary.class] && [first[@"url"] isKindOfClass:NSString.class]) record.picture = first[@"url"];
     record.added = dateOf(item[@"added_at"]) ?: NSDate.distantPast;
+    NSDictionary *tracks = [album[@"tracks"] isKindOfClass:NSDictionary.class] ? album[@"tracks"] : nil;
+    NSMutableArray<NSString *> *names = [NSMutableArray array];
+    for (id track in [tracks[@"items"] isKindOfClass:NSArray.class] ? tracks[@"items"] : @[]) {
+        if ([track isKindOfClass:NSDictionary.class] && [track[@"name"] isKindOfClass:NSString.class]) [names addObject:track[@"name"]];
+    }
+    if (names.count) record.trackNames = names;
     return record;
 }
 
@@ -320,6 +328,11 @@ static UIImage *fitted(UIImage *picture) {
     CALayer *_dim;
     UILabel *_note, *_pulledTitle, *_pulledArtist;
     UIButton *_gateButton, *_customButton;
+    // The layer the record out of the crate is lifted onto; the record's opening edge; the disc slid out of it on the
+    // way to its album, and whether it is sliding.
+    UIView *_lifted;
+    CALayer *_opening, *_disc;
+    BOOL _sliding;
     // What the sleeve lookups are doing, small at the bottom of the page.
     UIView *_status;
     UILabel *_statusText;
@@ -407,14 +420,20 @@ static UIImage *fitted(UIImage *picture) {
     _dim.opacity = 0;
     _dim.zPosition = 999;
     [_stage.layer addSublayer:_dim];
-    // Behind the record out of the crate, over the dim.
+    // The record out of the crate is lifted onto a layer of its own over the crate and its dim: in the crate's own
+    // layer its panels, hung in 3D from it, were drawn under the dim (the gatefold's inside came out darkened).
+    _lifted = [[UIView alloc] initWithFrame:back.bounds];
+    _lifted.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    _lifted.userInteractionEnabled = NO;
+    [back addSubview:_lifted];
+    // Behind the record out of the crate.
     _floor = [CALayer layer];
-    _floor.zPosition = 999.5;
+    _floor.zPosition = -1;
     _floor.shadowColor = UIColor.blackColor.CGColor;
     _floor.shadowOpacity = 0;
     _floor.shadowRadius = 22;
     _floor.shadowOffset = CGSizeMake(0, 18);
-    [_stage.layer addSublayer:_floor];
+    [_lifted.layer addSublayer:_floor];
     _note = [UILabel new];
     _note.textColor = [UIColor colorWithWhite:1 alpha:0.6];
     _note.font = [UIFont systemFontOfSize:15];
@@ -494,6 +513,7 @@ static UIImage *fitted(UIImage *picture) {
 - (void)viewWillAppear:(BOOL)animated {
     [super viewWillAppear:animated];
     self.tableView.backgroundView.hidden = NO;
+    [self tuckDiscIn];
 }
 
 - (void)viewDidDisappear:(BOOL)animated {
@@ -513,7 +533,7 @@ static UIImage *fitted(UIImage *picture) {
     [CATransaction begin];
     [CATransaction setDisableActions:YES];
     _dim.frame = _stage.bounds;
-    _floor.frame = _stage.bounds;
+    _floor.frame = _lifted.bounds;
     [CATransaction commit];
     [self placeStatus];
     if (_width != [self recordWidth]) {
@@ -965,11 +985,16 @@ static UIImage *fitted(UIImage *picture) {
         _tracks[key] = names;
         return;
     }
+    if (record.trackNames.count) {
+        _tracks[key] = record.trackNames;
+        return;
+    }
     NSString *album = [record.uri componentsSeparatedByString:@":"].lastObject;
     if (!album.length) return;
     __weak SGRRecordsPage *weakSelf = self;
     SGWebAPI(@"GET", [NSString stringWithFormat:@"albums/%@/tracks?limit=50", album], ^(NSInteger status, id answer) {
         SGRRecordsPage *page = weakSelf;
+        if (status != 200) SGLog(@"records: an album's tracks answered %ld", (long)status);
         if (!page || status != 200 || ![answer isKindOfClass:NSDictionary.class]) return;
         NSMutableArray<NSString *> *names = [NSMutableArray array];
         for (id track in [answer[@"items"] isKindOfClass:NSArray.class] ? answer[@"items"] : @[]) {
@@ -1293,6 +1318,7 @@ static UIImage *fitted(UIImage *picture) {
             opening.frame = strip.bounds;
             opening.backgroundColor = [UIColor colorWithWhite:0 alpha:0.55].CGColor;
             [strip addSublayer:opening];
+            _opening = strip;
         }
         [record addSublayer:strip];
         [extras addObject:strip];
@@ -1368,6 +1394,10 @@ static UIImage *fitted(UIImage *picture) {
     for (CALayer *layer in _extras) [layer removeFromSuperlayer];
     [_gloss removeFromSuperlayer];
     [_frontShade removeFromSuperlayer];
+    [_disc removeFromSuperlayer];
+    _disc = nil;
+    _opening = nil;
+    _sliding = NO;
     for (CAGradientLayer *shade in _shades) shade.hidden = NO;
     _gloss = nil;
     _frontShade = _backShade = nil;
@@ -1468,7 +1498,7 @@ static UIImage *fitted(UIImage *picture) {
     [CATransaction begin];
     [CATransaction setDisableActions:YES];
     [self dress:index];
-    layer.zPosition = 1000;
+    [self lift:layer];
     [CATransaction commit];
     CGPoint to = CGPointMake(_stage.bounds.size.width / 2, [self pulledBottom]);
     [self move:layer from:from transform:fromTransform lift:_width * 0.6 to:to transform:[self pulledPose] liftFirst:YES done:nil];
@@ -1546,7 +1576,7 @@ static UIImage *fitted(UIImage *picture) {
         [CATransaction begin];
         [CATransaction setDisableActions:YES];
         [self undress];
-        layer.zPosition = 0;
+        [self lower:(NSUInteger)_returning];
         [CATransaction commit];
     }
     _returning = -1;
@@ -1560,6 +1590,8 @@ static UIImage *fitted(UIImage *picture) {
     [CATransaction begin];
     [CATransaction setDisableActions:YES];
     [self undress];
+    if (_pulled >= 0 && _pulled < (NSInteger)_layers.count) [self lower:(NSUInteger)_pulled];
+    if (_returning >= 0 && _returning < (NSInteger)_layers.count) [self lower:(NSUInteger)_returning];
     _dim.opacity = 0;
     [CATransaction commit];
     _pulled = _returning = -1;
@@ -1573,6 +1605,147 @@ static UIImage *fitted(UIImage *picture) {
     _placing = NO;
     _placedSticker = nil;
     _floor.shadowOpacity = 0;
+}
+
+// Onto the layer over the crate and its dim, where it is drawn whole, its panels and all.
+- (void)lift:(CALayer *)layer {
+    if (layer.superlayer == _lifted.layer) return;
+    [layer removeFromSuperlayer];
+    [_lifted.layer addSublayer:layer];
+}
+
+// Back into the crate, between the records before and after it, which it lies under and over.
+- (void)lower:(NSUInteger)index {
+    CALayer *layer = _layers[index];
+    if (layer.superlayer == _stage.layer) return;
+    [layer removeFromSuperlayer];
+    CALayer *before = nil;
+    for (NSInteger i = (NSInteger)index - 1; i >= 0 && !before; i--) {
+        if (_layers[(NSUInteger)i].superlayer == _stage.layer) before = _layers[(NSUInteger)i];
+    }
+    if (before) [_stage.layer insertSublayer:layer above:before];
+    else [_stage.layer insertSublayer:layer atIndex:0];
+}
+
+// The record in the sleeve: black vinyl catching the light around its middle, fine grooves, the label in the album's
+// cover, and the spindle hole.
+- (CALayer *)discFor:(SGRRecord *)record {
+    CGFloat side = _width * 0.94;
+    CALayer *disc = [CALayer layer];
+    disc.bounds = CGRectMake(0, 0, side, side);
+    disc.cornerRadius = side / 2;
+    disc.masksToBounds = YES;
+    disc.backgroundColor = [UIColor colorWithWhite:0.06 alpha:1].CGColor;
+    CAGradientLayer *sheen = [CAGradientLayer layer];
+    sheen.type = kCAGradientLayerConic;
+    sheen.frame = disc.bounds;
+    sheen.startPoint = CGPointMake(0.5, 0.5);
+    sheen.endPoint = CGPointMake(0.5, 0);
+    UIColor *dark = [UIColor colorWithWhite:0.05 alpha:1], *light = [UIColor colorWithWhite:0.22 alpha:1];
+    sheen.colors = @[(id)dark.CGColor, (id)light.CGColor, (id)dark.CGColor, (id)dark.CGColor, (id)light.CGColor, (id)dark.CGColor];
+    sheen.locations = @[@0, @0.12, @0.25, @0.5, @0.62, @0.75];
+    [disc addSublayer:sheen];
+    for (int ring = 0; ring < 14; ring++) {
+        CGFloat radius = side / 2 * (0.42 + 0.56 * ring / 13.0);
+        CAShapeLayer *groove = [CAShapeLayer layer];
+        groove.frame = disc.bounds;
+        groove.path = [UIBezierPath bezierPathWithArcCenter:CGPointMake(side / 2, side / 2) radius:radius startAngle:0 endAngle:2 * M_PI clockwise:YES].CGPath;
+        groove.fillColor = UIColor.clearColor.CGColor;
+        groove.strokeColor = [UIColor colorWithWhite:1 alpha:0.05].CGColor;
+        groove.lineWidth = 0.5;
+        [disc addSublayer:groove];
+    }
+    CGFloat labelSide = side * 0.36;
+    CALayer *label = [CALayer layer];
+    label.frame = CGRectMake((side - labelSide) / 2, (side - labelSide) / 2, labelSide, labelSide);
+    label.cornerRadius = labelSide / 2;
+    label.masksToBounds = YES;
+    label.contents = (id)[self faceOf:record].CGImage;
+    label.contentsGravity = kCAGravityResizeAspectFill;
+    label.backgroundColor = [self colorsOf:record].firstObject.CGColor;
+    [disc addSublayer:label];
+    CALayer *hole = [CALayer layer];
+    hole.bounds = CGRectMake(0, 0, 7, 7);
+    hole.position = CGPointMake(side / 2, side / 2);
+    hole.cornerRadius = 3.5;
+    hole.backgroundColor = UIColor.blackColor.CGColor;
+    [disc addSublayer:hole];
+    return disc;
+}
+
+// On the way to its album, the record slides out of the open edge of its sleeve, turning a little as it comes, then
+// the album's page is pushed. The sleeve faces front first, its gatefold shut.
+- (void)slideOutThenOpen {
+    if (_pulled < 0 || _sliding) return;
+    NSUInteger index = (NSUInteger)_pulled;
+    SGRRecord *record = _records[index];
+    CATransformLayer *layer = _layers[index];
+    _sliding = YES;
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    if (_opened) {
+        _opened = NO;
+        _flap.transform = CATransform3DIdentity;
+        [self placeCaption];
+    }
+    CATransform3D was = (layer.presentationLayer ?: layer).transform;
+    _turn = 0;
+    [layer removeAllAnimations];
+    layer.transform = [self pulledPose];
+    [self light];
+    _opening.hidden = YES;
+    [_disc removeFromSuperlayer];
+    _disc = [self discFor:record];
+    _disc.position = CGPointMake(_width / 2, _width / 2);
+    _disc.zPosition = -kSpine / 2;
+    [layer addSublayer:_disc];
+    [CATransaction commit];
+
+    CABasicAnimation *face = [CABasicAnimation animationWithKeyPath:@"transform"];
+    face.fromValue = [NSValue valueWithCATransform3D:was];
+    face.toValue = [NSValue valueWithCATransform3D:layer.transform];
+    face.duration = 0.25;
+    [layer addAnimation:face forKey:@"face"];
+
+    CGFloat out = _width * 0.62;
+    CABasicAnimation *slide = [CABasicAnimation animationWithKeyPath:@"position.x"];
+    slide.fromValue = @(_width / 2);
+    slide.toValue = @(_width / 2 + out);
+    CABasicAnimation *spin = [CABasicAnimation animationWithKeyPath:@"transform.rotation.z"];
+    spin.fromValue = @0;
+    spin.toValue = @(M_PI * 0.5);
+    __weak SGRRecordsPage *weakSelf = self;
+    [CATransaction begin];
+    [CATransaction setCompletionBlock:^{
+        SGRRecordsPage *page = weakSelf;
+        if (!page || !page->_sliding) return;
+        [page open:record];
+    }];
+    for (CABasicAnimation *animation in @[slide, spin]) {
+        animation.beginTime = CACurrentMediaTime() + 0.2;
+        animation.duration = 0.6;
+        animation.fillMode = kCAFillModeBackwards;
+        animation.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut];
+    }
+    [CATransaction setDisableActions:YES];
+    _disc.position = CGPointMake(_width / 2 + out, _width / 2);
+    _disc.transform = CATransform3DMakeRotation(M_PI * 0.5, 0, 0, 1);
+    [_disc addAnimation:slide forKey:@"slide"];
+    [_disc addAnimation:spin forKey:@"spin"];
+    [CATransaction commit];
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleSoft] impactOccurred];
+}
+
+// Back from the album, the record is in its sleeve again.
+- (void)tuckDiscIn {
+    if (!_disc) return;
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    [_disc removeFromSuperlayer];
+    _disc = nil;
+    _opening.hidden = NO;
+    [CATransaction commit];
+    _sliding = NO;
 }
 
 // The gatefold's front swings open on its left edge, the record moving over and getting smaller so the spread fits;
@@ -1863,7 +2036,8 @@ static UIImage *fitted(UIImage *picture) {
         } else if (_placing) {
             if (onRecord) [self placeStickerAt:point];
         } else if (!_gateButton.hidden && CGRectContainsPoint(CGRectInset(_gateButton.frame, -8, -8), point)) [self toggleGatefold];
-        else if (CGRectContainsPoint(CGRectInset([self pulledFrame], -8, -8), point)) [self open:_records[(NSUInteger)_pulled]];
+        else if (_sliding) return;
+        else if (CGRectContainsPoint(CGRectInset([self pulledFrame], -8, -8), point)) [self slideOutThenOpen];
         else [self putBack];
         return;
     }
