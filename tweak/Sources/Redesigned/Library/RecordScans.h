@@ -29,6 +29,11 @@
 // no vinyl pressing has a scan of it.
 void SGRRecordSleeve(NSString *title, NSString *artist, NSString *kind, UIImage *cover, void (^done)(SGRSleeve *sleeve));
 
+// A sleeve of the pictures that came with a local album's songs (Shared/LocalFiles/DriveImport.h, SGLocalAlbumArtwork),
+// by kind; its front is `cover` when none came. The inside is its first two pictures, or one spread cut in half. nil
+// when there is nothing but a front. Any thread.
+SGRSleeve *SGRSleeveOfArtwork(NSDictionary<NSString *, NSArray<NSString *> *> *artwork, UIImage *cover);
+
 // The colors a label strip in the cover's colors takes: the cover's most common color, and of the cover's other
 // colors the one that reads best on it, else white or black. Any thread.
 void SGRSpineColors(UIImage *cover, UIColor **back, UIColor **text);

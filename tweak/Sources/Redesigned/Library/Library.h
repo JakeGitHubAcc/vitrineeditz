@@ -13,7 +13,7 @@
 //                       from a button in the header (Shared/LocalFiles/LocalAlbums.h)
 //     RecordsPage.m     Records: the saved albums and the local ones as a crate of records to flip through, the
 //                       page of its own tab, vitrine:records
-//     DriveImportPage.m Add from Google Drive, the + of Local Albums: songs from a share link saved as local
+//     DriveImportPage.m Add from a Link, the + of Local Albums: songs from a share link saved as local
 //                       files (Shared/LocalFiles/DriveImport.h)
 //
 // Every hook installs only while Redesigned UI is on (SGRedesignedUI).
@@ -38,6 +38,6 @@ UIViewController *SGRLocalAlbumsPageNew(void);
 // RecordsPage.m. Records as a page of its own; its tab opens it as vitrine:records (Shared/Navigation/Links.h).
 UIViewController *SGRRecordsPageNew(void);
 
-// DriveImportPage.m. Asks for a Google Drive share link over `owner` and imports what it shares
+// DriveImportPage.m. Asks for a share link (Google Drive, Mega, or straight to a file) over `owner` and imports what it shares
 // (Shared/LocalFiles/DriveImport.h), showing the import's progress on a page of its own.
 void SGRAskDriveImport(UIViewController *owner);

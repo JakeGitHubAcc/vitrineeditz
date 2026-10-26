@@ -213,7 +213,7 @@ static UIImageView *coverView(CGFloat radius) {
     UIBarButtonItem *sort = [[UIBarButtonItem alloc] initWithImage:[UIImage systemImageNamed:@"arrow.up.arrow.down"]
                                                               menu:[UIMenu menuWithChildren:@[sortBy]]];
     sort.accessibilityLabel = @"Sort By";
-    UIBarButtonItem *add = [[UIBarButtonItem alloc] initWithPrimaryAction:[UIAction actionWithTitle:@"Add from Google Drive"
+    UIBarButtonItem *add = [[UIBarButtonItem alloc] initWithPrimaryAction:[UIAction actionWithTitle:@"Add from a Link"
         image:[UIImage systemImageNamed:@"plus"] identifier:nil handler:^(UIAction *action) {
             SGRLocalAlbumsPage *page = weakSelf;
             if (page) SGRAskDriveImport(page);

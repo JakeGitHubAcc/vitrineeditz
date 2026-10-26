@@ -1,4 +1,4 @@
-// Library redesign: Add from Google Drive (Shared/LocalFiles/DriveImport.h), from the + at the top of Local
+// Library redesign: Add from a Link (Shared/LocalFiles/DriveImport.h), from the + at the top of Local
 // Albums (LocalAlbumsPage.m). Asks for a share link, then shows the import: each file, what is being done to
 // it and what came of it, with Stop while it runs.
 //
@@ -46,7 +46,7 @@ static NSString *stateSymbol(SGDriveItemState state) {
 - (instancetype)initWithJob:(SGDriveJob *)job {
     if (!(self = [super initWithStyle:UITableViewStyleInsetGrouped])) return nil;
     _job = job;
-    self.title = @"Google Drive";
+    self.title = @"Import";
     return self;
 }
 
@@ -124,11 +124,11 @@ static NSString *stateSymbol(SGDriveItemState state) {
 @end
 
 void SGRAskDriveImport(UIViewController *owner) {
-    UIAlertController *ask = [UIAlertController alertControllerWithTitle:@"Add from Google Drive"
-                                                                 message:@"Paste a link to a song, a folder or a .zip shared with anyone who has the link."
+    UIAlertController *ask = [UIAlertController alertControllerWithTitle:@"Add from a Link"
+                                                                 message:@"Paste a Google Drive or Mega link to a song, a folder or a .zip shared with anyone who has the link, or a link straight to a song or a .zip."
                                                           preferredStyle:UIAlertControllerStyleAlert];
     [ask addTextFieldWithConfigurationHandler:^(UITextField *field) {
-        field.placeholder = @"https://drive.google.com/…";
+        field.placeholder = @"https://…";
         field.keyboardType = UIKeyboardTypeURL;
         field.autocorrectionType = UITextAutocorrectionTypeNo;
         field.autocapitalizationType = UITextAutocapitalizationTypeNone;
@@ -142,8 +142,8 @@ void SGRAskDriveImport(UIViewController *owner) {
         if (!owner) return;
         SGDriveJob *job = SGDriveImportStart(link);
         if (!job) {
-            UIAlertController *wrong = [UIAlertController alertControllerWithTitle:@"Not a Google Drive link"
-                                                                           message:@"Copy the link from Share ▸ Copy link in Google Drive."
+            UIAlertController *wrong = [UIAlertController alertControllerWithTitle:@"Not a link"
+                                                                           message:@"Copy the link from the site's Share or Copy link, starting with https://."
                                                                     preferredStyle:UIAlertControllerStyleAlert];
             [wrong addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleCancel handler:nil]];
             [owner presentViewController:wrong animated:YES completion:nil];

@@ -9,7 +9,7 @@
 //     LocalLyrics.h      the user's own .lrc files, linked to a local file or matched by its names
 //     LocalCover.m       the file's own cover, found where Spotify's player shows a placeholder
 //     LocalAlbums.h      the files in Documents gathered into albums, and an album played
-//     DriveImport.h      songs from a Google Drive share link saved as local files, lossless ones as AAC
+//     DriveImport.h      songs from a share link (Drive, Mega, direct) saved as local files, lossless ones as AAC
 //
 // The file itself is never written: Spotify read its tags when it scanned it, and writing them back
 // would take a tag writer per format. So an edit is stored by URI and laid over what Spotify read.

@@ -109,9 +109,9 @@ static UIViewController *modSettingsPage(void) {
         pageRow(@"Listening stats", @"chart.bar.fill", UIColor.systemBlueColor, ^UIViewController *{ return SGListeningStatsPage(); }),
         // Covers animated on the user's computer: its own page, as the lock screen links to it too.
         pageRow(@"Animated covers", @"wand.and.stars", SGColorRGB(0xBF5AF2), ^UIViewController *{ return SGAnimatedCoversPage(); }),
-        // Local Albums and Add from Google Drive, here too because their button in Your Library's header is the redesign's.
+        // Local Albums and Add from a Link, here too because their button in Your Library's header is the redesign's.
         pageRow(@"Local albums", @"square.stack.3d.up.fill", SGColorRGB(0xFF9F0A), ^UIViewController *{ return SGRLocalAlbumsPageNew(); }),
-        SGWithTile(SGActionRow(@"Add from Google Drive", @"Songs from a share link, saved as local files", ^{
+        SGWithTile(SGActionRow(@"Add from a link", @"Songs from Google Drive, Mega or a direct link, saved as local files", ^{
             UIViewController *top = SGTopController();
             if (top) SGRAskDriveImport(top);
         }), @"icloud.and.arrow.down.fill", UIColor.systemBlueColor),
