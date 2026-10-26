@@ -364,7 +364,11 @@ UIViewController *SGRPlayerSettingsPage(NSArray *more) {
         SGSliderRow(@"Dot size", nil, SGRMosaicSizeLeast, SGRMosaicSizeMost, 1, ^double { return SGRMosaicSize(); },
                     ^(double value) { SGSetInt(SGRKeyMosaicSize, lround(value)); },
                     ^NSString *(double value) { return [NSString stringWithFormat:@"%.0f%%", value]; }),
-        SGSwitchRow(@"Shadow under text", nil, SGRKeyMosaicTextShadow),
+        SGSliderRow(@"Audio threshold", @"How loud the music must be before dots light. Higher keeps more of the screen dark.",
+                    SGRMosaicThresholdLeast, SGRMosaicThresholdMost, 1, ^double { return SGRMosaicThreshold(); },
+                    ^(double value) { SGSetInt(SGRKeyMosaicThreshold, lround(value)); },
+                    ^NSString *(double value) { return [NSString stringWithFormat:@"%.0f%%", value]; }),
+        SGSwitchRow(@"Shadow under text", @"Darkens the dots behind the title, times and buttons, and shades the text.", SGRKeyMosaicTextShadow),
     ];
     for (SGModRow *row in mosaic) row.visible = ^BOOL { return SGRPlayerBackground() == SGRPlayerBackgroundMosaic; };
 

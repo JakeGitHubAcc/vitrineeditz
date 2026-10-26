@@ -174,11 +174,19 @@ enum { SGRMosaicDotsLeast = 12, SGRMosaicDotsMost = 64, SGRMosaicDotsDefault = 3
 enum { SGRMosaicSizeLeast = 30, SGRMosaicSizeMost = 100, SGRMosaicSizeDefault = 78 };
 NSInteger SGRMosaicDots(void);
 NSInteger SGRMosaicSize(void);
+// How loud a band must be, in percent of the song's loudest of late, before Mosaic's dots light for it: only the
+// part of the band's level over it reaches out from the cover, so a higher threshold leaves more of the wall dark.
+#define SGRKeyMosaicThreshold @"spotifyglass.redesign.player.mosaic.threshold"
+enum { SGRMosaicThresholdLeast = 0, SGRMosaicThresholdMost = 90, SGRMosaicThresholdDefault = 45 };
+NSInteger SGRMosaicThreshold(void);
 // A soft shadow under the player's text and buttons while Mosaic is behind them, so a lit dot never washes
 // them out (PlayerTextShadow.x). On until switched off.
 #define SGRKeyMosaicTextShadow @"spotifyglass.redesign.player.mosaic.textShadow"
 // The shadows put on or taken off again, for a change of background or of the switch.
 void SGRPlayerTextShadowsChanged(void);
+// Where the player's text, glyphs and bars are, in `view`'s coordinates, while the shadows are on: Mosaic darkens
+// its dots under and around them. Empty while they are off or the player is not in `view`'s window.
+NSArray<NSValue *> *SGRPlayerTextRectsIn(UIView *view);
 // The animated cover Mosaic plays over the cover's square, from PlayerMotion.x; nil takes it off.
 void SGRPlayerMosaicSetClip(NSURL *file, UIImage *poster);
 // Mosaic is on the field with an animated cover playing in the square, which Spotify's cover makes room for.
