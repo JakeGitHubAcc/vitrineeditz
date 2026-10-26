@@ -11,8 +11,6 @@
 //                             popover from the ⋯ that asks every source and lists each as it answers
 //     Animated Cover          the playing album's cover animated on the user's computer, and its two settings
 //                             (Shared/AnimatedArtwork/SGCoverAnimator.h)
-//     Share as Instagram Note
-//                             the song written up as a note, copied, and Instagram opened (PlayerNote.m)
 //     Go to Album             a local file's album, the page Local Albums has for it (Redesigned/Library/LocalAlbumsPage.m)
 //
 // The item says under its name what is not as Spotify plays it, so the menu reads as a settings summary.
@@ -233,10 +231,6 @@ static NSArray<UIMenuElement *> *playerItems(void) {
     UIAction *lyrics = lyricsSourceItem();
     if (lyrics) [items addObject:lyrics];
     [items addObjectsFromArray:SGAnimatedCoverMenu(SGLockMotionPlayingPicture(), ^{ SGAnimatedCoverSendPlaying(); })];
-    if (SGPlayerState().track.trackTitle.length && ![sheetKind() isEqualToString:@"episode"]) {
-        [items addObject:[UIAction actionWithTitle:@"Share as Instagram Note" image:symbol(@"text.bubble") identifier:nil
-                                           handler:^(UIAction *action) { SGRPlayerShowNoteComposer(); }]];
-    }
     NSString *playing = SGURIString(SGPlayerState().track.URI);
     // The albums are scanned on first use, so the item shows from the menu's next opening on.
     if (SGLocalFileIs(playing) && SGLocalAlbums() && SGLocalAlbumOfTrack(playing)) {
