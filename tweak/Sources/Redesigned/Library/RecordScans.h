@@ -11,11 +11,22 @@
 // keeps its streaming cover. Pictures are kept by what MusicBrainz says they show: a spine only when that is all it
 // shows and it is drawn out like one (a back photographed with its spine is a back).
 //
+// With a Discogs token (SGKeyDiscogsToken, the user's own, from discogs.com > Settings > Developers), an album none of
+// MusicBrainz's pressings has a scan of is looked for on Discogs too (api.discogs.com, which answers its database
+// only to a signed-in program): its master release of that title, the master's vinyl versions as above, and the first
+// whose front shows the cover. Discogs names a picture only as the front or not, so the rest are told by their shape:
+// one drawn out like a spine is the spine, one twice as wide as tall is a spread (the inside, unless its right half
+// is the front, when its left half is the back), and the first square one after the front the back.
+//
 // What is found, and what is not, is kept in Caches, so an album is asked about once (one that had nothing is asked
 // again after a month).
 //
 // Threading: main thread, but for the downloads, which report on main.
 #import <UIKit/UIKit.h>
+
+#define SGKeyDiscogsToken @"spotifyglass.records.discogsToken"
+// After the token is set or changed: every album found to have no sleeve is looked for again. Main thread.
+void SGRRecordScansForgetMissing(void);
 
 @interface SGRSleeve : NSObject
 @property (nonatomic, strong) UIImage *front, *back, *spine, *sticker;

@@ -13,9 +13,7 @@ static const CGFloat kCoverSide = 1200;
 NSNotificationName const SGLocalFileEditsDidChangeNotification = @"spotifyglass.localFiles.editsDidChange";
 
 static NSDictionary<NSString *, NSDictionary *> *sg_edits;
-// The edited URIs by the names in them ("artist
-album
-title", decoded and lowercased): a file's URI made by Local
+// The edited URIs by the names in them ("artist\nalbum\ntitle", decoded and lowercased): a file's URI made by Local
 // Albums before the player played it can differ from the player's own (its escapes, its length a second off), so an
 // edit made on the album's page is found for the player's URI by its names and length too.
 static NSDictionary<NSString *, NSArray<NSString *> *> *sg_editsByName;
@@ -31,9 +29,7 @@ static NSString *nameKey(NSString *uri, NSInteger *seconds) {
     NSArray<NSString *> *parts = [[uri substringFromIndex:kLocalPrefix.length] componentsSeparatedByString:@":"];
     if (parts.count != 4) return nil;
     if (seconds) *seconds = parts[3].integerValue;
-    return [NSString stringWithFormat:@"%@
-%@
-%@", decoded(parts[0]).lowercaseString, decoded(parts[1]).lowercaseString, decoded(parts[2]).lowercaseString];
+    return [NSString stringWithFormat:@"%@\n%@\n%@", decoded(parts[0]).lowercaseString, decoded(parts[1]).lowercaseString, decoded(parts[2]).lowercaseString];
 }
 
 static NSDictionary<NSString *, NSArray<NSString *> *> *byName(NSDictionary<NSString *, NSDictionary *> *edits) {

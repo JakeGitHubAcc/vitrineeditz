@@ -114,6 +114,19 @@ static void loadEntry(NSDictionary *entry, SGRSleeveDone done) {
 
 #pragma mark - asking
 
+static void getJSONWith(NSURL *url, NSString *authorization, void (^done)(NSInteger status, id answer)) {
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
+    request.timeoutInterval = kTimeout;
+    [request setValue:kUserAgent forHTTPHeaderField:@"User-Agent"];
+    [request setValue:@"application/json" forHTTPHeaderField:@"Accept"];
+    if (authorization) [request setValue:authorization forHTTPHeaderField:@"Authorization"];
+    [[NSURLSession.sharedSession dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        NSInteger status = [response isKindOfClass:NSHTTPURLResponse.class] ? ((NSHTTPURLResponse *)response).statusCode : 0;
+        id answer = data.length ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+        dispatch_async(dispatch_get_main_queue(), ^{ done(status, answer); });
+    }] resume];
+}
+
 static void getJSON(NSURL *url, BOOL musicBrainz, void (^done)(NSInteger status, id answer)) {
     NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
     request.timeoutInterval = kTimeout;
@@ -383,7 +396,9 @@ static void download(NSString *key, NSDictionary<NSString *, NSString *> *found,
     for (NSString *what in pictureKinds()) {
         if (!found[what]) continue;
         dispatch_group_enter(group);
-        [[NSURLSession.sharedSession dataTaskWithURL:secure(found[what]) completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:secure(found[what])];
+        [request setValue:kUserAgent forHTTPHeaderField:@"User-Agent"];
+        [[NSURLSession.sharedSession dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
             UIImage *picture = data.length ? [UIImage imageWithData:data] : nil;
             dispatch_async(dispatch_get_main_queue(), ^{
                 if (picture) pictures[what] = picture;
@@ -403,7 +418,11 @@ static void download(NSString *key, NSDictionary<NSString *, NSString *> *found,
             UIImage *first = pictures[@"gatefold1"];
             if (first && !pictures[@"gatefold2"] && first.size.width > first.size.height * 1.5) {
                 NSArray<UIImage *> *both = halves(first);
-                if (both) {
+                // The outside laid flat, its right half the front: its left half is the back, and there is no inside.
+                if (both && pictures[@"front"] && sameCover(both[1], pictures[@"front"])) {
+                    if (!pictures[@"back"]) pictures[@"back"] = both[0];
+                    [pictures removeObjectForKey:@"gatefold1"];
+                } else if (both) {
                     pictures[@"gatefold1"] = both[0];
                     pictures[@"gatefold2"] = both[1];
                 }
@@ -470,6 +489,159 @@ static void finish(SGRScanJob *job, NSDictionary *entry) {
     pump();
 }
 
+#pragma mark - Discogs
+
+static const NSUInteger kDiscogsVersionsTried = 4;
+static CFTimeInterval sg_lastDiscogs;
+
+static NSString *discogsToken(void) {
+    NSString *token = [NSUserDefaults.standardUserDefaults stringForKey:SGKeyDiscogsToken];
+    token = [token stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    return token.length ? token : nil;
+}
+
+// Discogs as the user's token, no sooner than kSpacing after its last request.
+static void getDiscogs(NSString *path, void (^done)(NSInteger status, id answer)) {
+    NSString *token = discogsToken();
+    NSTimeInterval wait = MAX(0, kSpacing - (CACurrentMediaTime() - sg_lastDiscogs));
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(wait * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        sg_lastDiscogs = CACurrentMediaTime();
+        getJSONWith([NSURL URLWithString:[@"https://api.discogs.com/" stringByAppendingString:path]],
+                    [@"Discogs token=" stringByAppendingString:token ?: @""], done);
+    });
+}
+
+static NSString *formValue(NSString *text) {
+    return [text stringByAddingPercentEncodingWithAllowedCharacters:NSCharacterSet.alphanumericCharacterSet] ?: @"";
+}
+
+// The master release of exactly this title among the search's ("Artist - Title"), 0 for none.
+static NSInteger masterOf(id answer, NSString *title) {
+    NSString *wanted = bare(title);
+    for (id result in [answer isKindOfClass:NSDictionary.class] && [answer[@"results"] isKindOfClass:NSArray.class] ? answer[@"results"] : @[]) {
+        if (![result isKindOfClass:NSDictionary.class] || ![result[@"id"] isKindOfClass:NSNumber.class]) continue;
+        NSString *name = [result[@"title"] isKindOfClass:NSString.class] ? result[@"title"] : @"";
+        NSRange dash = [name rangeOfString:@" - "];
+        if (dash.location != NSNotFound) name = [name substringFromIndex:NSMaxRange(dash)];
+        if (wanted.length && [bare(name) isEqualToString:wanted]) return [result[@"id"] integerValue];
+    }
+    return 0;
+}
+
+// The master's vinyl versions worth looking at, best first: the master's own title, never a picture disc or a deluxe
+// pressing; plain ones before those a note marks (a reissue, a colored vinyl), then the oldest.
+static NSArray<NSNumber *> *versionsOf(id answer, NSString *title) {
+    NSString *wanted = bare(title);
+    NSMutableArray<NSDictionary *> *kept = [NSMutableArray array];
+    for (id version in [answer isKindOfClass:NSDictionary.class] && [answer[@"versions"] isKindOfClass:NSArray.class] ? answer[@"versions"] : @[]) {
+        if (![version isKindOfClass:NSDictionary.class] || ![version[@"id"] isKindOfClass:NSNumber.class]) continue;
+        // The medium is in major_formats ("Vinyl"); format only describes it ("LP, Album, Reissue, Picture Disc").
+        NSString *format = [version[@"format"] isKindOfClass:NSString.class] ? version[@"format"] : @"";
+        NSString *name = [version[@"title"] isKindOfClass:NSString.class] ? version[@"title"] : @"";
+        NSArray *media = [version[@"major_formats"] isKindOfClass:NSArray.class] ? version[@"major_formats"] : @[];
+        if (![media containsObject:@"Vinyl"] || matches(format, kNeverPattern) || ![bare(name) isEqualToString:wanted]) continue;
+        BOOL noted = matches(format, @"reissue|repress|remaster|limited|colou?r|unofficial");
+        NSString *released = [version[@"released"] isKindOfClass:NSString.class] && ((NSString *)version[@"released"]).length ? version[@"released"] : @"9999";
+        [kept addObject:@{@"id": version[@"id"], @"noted": @(noted), @"released": released}];
+    }
+    [kept sortUsingDescriptors:@[[NSSortDescriptor sortDescriptorWithKey:@"noted" ascending:YES],
+                                 [NSSortDescriptor sortDescriptorWithKey:@"released" ascending:YES]]];
+    NSMutableArray<NSNumber *> *ids = [NSMutableArray array];
+    for (NSDictionary *version in kept) {
+        if (ids.count == kDiscogsVersionsTried) break;
+        [ids addObject:version[@"id"]];
+    }
+    return ids;
+}
+
+// A release's pictures as the sleeve's parts, by their shape: the primary is the front, one drawn out like a spine
+// the spine, one about twice as wide as tall a spread, and the first square one after the front the back. nil
+// without a front.
+static NSDictionary<NSString *, NSString *> *discogsSleeveIn(id answer) {
+    NSMutableDictionary<NSString *, NSString *> *found = [NSMutableDictionary dictionary];
+    for (id image in [answer isKindOfClass:NSDictionary.class] && [answer[@"images"] isKindOfClass:NSArray.class] ? answer[@"images"] : @[]) {
+        if (![image isKindOfClass:NSDictionary.class] || ![image[@"uri"] isKindOfClass:NSString.class] || !((NSString *)image[@"uri"]).length) continue;
+        NSString *address = image[@"uri"];
+        CGFloat width = [image[@"width"] doubleValue], height = [image[@"height"] doubleValue];
+        CGFloat shape = width > 0 && height > 0 ? MAX(width, height) / MIN(width, height) : 1;
+        BOOL wide = width > height;
+        if ([image[@"type"] isEqual:@"primary"]) {
+            if (!found[@"front"]) found[@"front"] = address;
+        } else if (shape >= kSpineLong) {
+            if (!found[@"spine"]) found[@"spine"] = address;
+        } else if (wide && shape >= 1.7 && shape <= 2.3) {
+            if (!found[@"gatefold1"]) found[@"gatefold1"] = address;
+        } else if (shape <= 1.15 && found[@"front"] && !found[@"back"]) {
+            found[@"back"] = address;
+        }
+    }
+    return found[@"front"] ? found : nil;
+}
+
+// Each version's pictures in turn until one has a front showing the album's cover.
+static void lookThroughDiscogs(NSArray<NSNumber *> *ids, NSUInteger at, UIImage *cover, void (^done)(NSDictionary<NSString *, NSString *> *found)) {
+    if (at >= ids.count) {
+        done(nil);
+        return;
+    }
+    void (^next)(void) = ^{ lookThroughDiscogs(ids, at + 1, cover, done); };
+    getDiscogs([NSString stringWithFormat:@"releases/%@", ids[at]], ^(NSInteger status, id answer) {
+        NSDictionary<NSString *, NSString *> *found = status == 200 ? discogsSleeveIn(answer) : nil;
+        if (!found) {
+            next();
+            return;
+        }
+        if (!cover) {
+            done(found);
+            return;
+        }
+        NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:secure(found[@"front"])];
+        [request setValue:kUserAgent forHTTPHeaderField:@"User-Agent"];
+        [[NSURLSession.sharedSession dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+            UIImage *front = data.length ? [UIImage imageWithData:data] : nil;
+            BOOL same = front && sameCover(front, cover);
+            dispatch_async(dispatch_get_main_queue(), ^{
+                if (same) done(found);
+                else next();
+            });
+        }] resume];
+    });
+}
+
+// Discogs's sleeve of the album, `done` with it or nil; nil at once without a token.
+static void lookOnDiscogs(SGRScanJob *job, NSString *title, NSString *artist, void (^done)(NSDictionary<NSString *, NSString *> *found)) {
+    if (!discogsToken()) {
+        done(nil);
+        return;
+    }
+    NSString *search = [NSString stringWithFormat:@"database/search?type=master&per_page=10&release_title=%@%@", formValue(title),
+                        artist.length ? [@"&artist=" stringByAppendingString:formValue(artist)] : @""];
+    getDiscogs(search, ^(NSInteger status, id answer) {
+        NSInteger master = status == 200 ? masterOf(answer, title) : 0;
+        if (!master) {
+            if (status != 200) SGLog(@"records: Discogs answered %ld for a search", (long)status);
+            done(nil);
+            return;
+        }
+        getDiscogs([NSString stringWithFormat:@"masters/%ld/versions?per_page=100&sort=released&sort_order=asc", (long)master], ^(NSInteger listed, id versions) {
+            NSArray<NSNumber *> *ids = listed == 200 ? versionsOf(versions, title) : @[];
+            lookThroughDiscogs(ids, 0, job.cover, ^(NSDictionary<NSString *, NSString *> *found) {
+                SGLog(@"records: Discogs, %lu vinyl versions, sleeve %@", (unsigned long)ids.count, found ? [found.allKeys componentsJoinedByString:@" "] : @"none");
+                done(found);
+            });
+        });
+    });
+}
+
+void SGRRecordScansForgetMissing(void) {
+    NSMutableDictionary *index = scanIndex();
+    for (NSString *key in index.allKeys) {
+        if (!entryHasFront(index[key])) [index removeObjectForKey:key];
+    }
+    [index writeToFile:indexPath() atomically:YES];
+    [sg_failed removeAllObjects];
+}
+
 static void run(SGRScanJob *job) {
     NSString *title = plainTitle(job.title);
     NSString *artist = [job.artist componentsSeparatedByString:@", "].firstObject ?: @"";
@@ -483,9 +655,16 @@ static void run(SGRScanJob *job) {
             finish(job, nil);
             return;
         }
+        // What MusicBrainz has not, Discogs may.
+        void (^elsewhere)(void) = ^{
+            lookOnDiscogs(job, title, artist, ^(NSDictionary<NSString *, NSString *> *found) {
+                if (!found) finish(job, @{@"at": NSDate.date});
+                else download(job.key, found, ^(NSDictionary *entry) { finish(job, entry); });
+            });
+        };
         NSString *group = groupOf(answer, title);
         if (!group) {
-            finish(job, @{@"at": NSDate.date});
+            elsewhere();
             return;
         }
         NSURL *browse = [NSURL URLWithString:[NSString stringWithFormat:@"https://musicbrainz.org/ws/2/release?release-group=%@&inc=media&fmt=json&limit=100", group]];
@@ -498,7 +677,7 @@ static void run(SGRScanJob *job) {
             NSArray<NSString *> *ids = pressings(releases, title);
             lookThrough(ids, 0, job.cover, ^(NSDictionary<NSString *, NSString *> *found) {
                 SGLog(@"records: %lu vinyl pressings, sleeve %@", (unsigned long)ids.count, found ? [found.allKeys componentsJoinedByString:@" "] : @"none");
-                if (!found) finish(job, @{@"at": NSDate.date});
+                if (!found) elsewhere();
                 else download(job.key, found, ^(NSDictionary *entry) { finish(job, entry); });
             });
         });
