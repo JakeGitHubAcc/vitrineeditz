@@ -829,10 +829,8 @@ static UIImage *fitted(UIImage *picture) {
         [back setFill];
         UIRectFill(CGRectMake(0, 0, size.width, size.height));
         if (scan && scan.size.width > 0) {
-            // Across the strip's width; a spine thinner than the strip is stretched up to 2.5 times, then centered.
-            CGFloat natural = size.width * scan.size.height / scan.size.width;
-            CGFloat height = MIN(size.height, natural * 2.5);
-            [scan drawInRect:CGRectMake(0, (size.height - height) / 2, size.width, height)];
+            // Stretched over the whole strip, however much thinner the real spine is, so it is the strip.
+            [scan drawInRect:CGRectMake(0, 0, size.width, size.height)];
             return;
         }
         NSMutableParagraphStyle *paragraph = [NSMutableParagraphStyle new];
