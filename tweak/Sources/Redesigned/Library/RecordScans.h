@@ -26,8 +26,8 @@
 // `kind` is Spotify's album_type: album, single (a single or an EP), ep or compilation. A pressing's front must show the
 // same picture as `cover`, the streaming one, allowing for a scan's light and color, so a picture disc in its clear
 // sleeve, or another edition's cover, is passed over for the next. `done` on main, once, with the sleeve, or nil when
-// no vinyl pressing has a scan of it.
-void SGRRecordSleeve(NSString *title, NSString *artist, NSString *kind, UIImage *cover, void (^done)(SGRSleeve *sleeve));
+// no vinyl pressing has a scan of it. `again` looks again for an album found to have none, or whose lookup failed.
+void SGRRecordSleeve(NSString *title, NSString *artist, NSString *kind, UIImage *cover, BOOL again, void (^done)(SGRSleeve *sleeve));
 
 // A sleeve of the pictures that came with a local album's songs (Shared/LocalFiles/DriveImport.h, SGLocalAlbumArtwork),
 // by kind; its front is `cover` when none came. The inside is its first two pictures, or one spread cut in half. nil
