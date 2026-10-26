@@ -8,8 +8,8 @@
 #import "Core/SGCore.h"
 #import "Player.h"
 
-static const float kShadowOpacity = 0.6f;
-static const CGFloat kShadowRadius = 4;
+static const float kShadowOpacity = 0.85f;
+static const CGFloat kShadowRadius = 6;
 static const CGSize kShadowOffset = {0, 1};
 
 // The units' views laid out so far, held weakly; and the ones given a shadow, so only ours are taken off.
@@ -40,6 +40,34 @@ static void unitLaidOut(UIViewController *unit) {
     if (!view) return;
     [sg_units addObject:view];
     shade(view, wanted());
+}
+
+// The views that show something: a label with text, an image view with an image, a glyph, a slider or progress
+// bar, and a bare view filled with a color (the redesign's bars). A unit's own full-width rows are passed through.
+static void collect(UIView *view, UIView *target, CGFloat widest, NSMutableArray<NSValue *> *rects, int depth) {
+    if (view.hidden || view.alpha < 0.05 || depth > 14) return;
+    BOOL shows = NO;
+    if ([view isKindOfClass:UILabel.class]) shows = ((UILabel *)view).text.length > 0;
+    else if ([view isKindOfClass:UIImageView.class]) shows = ((UIImageView *)view).image != nil;
+    else if ([view isKindOfClass:UISlider.class] || [view isKindOfClass:UIProgressView.class]) shows = YES;
+    else if ([NSStringFromClass(view.class) containsString:@"Glyph"]) shows = YES;
+    else if (!view.subviews.count && view.backgroundColor && CGColorGetAlpha(view.backgroundColor.CGColor) > 0.1) shows = YES;
+    if (shows) {
+        CGRect rect = [view convertRect:view.bounds toView:target];
+        if (rect.size.width > 0 && rect.size.height > 0 && rect.size.width < widest) [rects addObject:[NSValue valueWithCGRect:rect]];
+        return;
+    }
+    for (UIView *sub in view.subviews) collect(sub, target, widest, rects, depth + 1);
+}
+
+NSArray<NSValue *> *SGRPlayerTextRectsIn(UIView *view) {
+    if (!wanted() || !view.window) return @[];
+    NSMutableArray<NSValue *> *rects = [NSMutableArray array];
+    CGFloat widest = view.window.bounds.size.width * 0.95;
+    for (UIView *unit in sg_units.allObjects) {
+        if (unit.window == view.window) collect(unit, view, widest, rects, 0);
+    }
+    return rects;
 }
 
 void SGRPlayerTextShadowsChanged(void) {

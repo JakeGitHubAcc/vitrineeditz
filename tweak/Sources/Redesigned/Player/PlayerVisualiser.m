@@ -78,6 +78,15 @@ static const CGFloat kWallDark = 0.92, kReach = 0.5;
 static const float kUnlit = 0.12f, kUnlitPulse = 0.08f, kTrail = 0.35f;
 // The animated cover's corners, a share of its side, as Spotify rounds its square.
 static const CGFloat kClipCorner = 0.025;
+// The ring of dark dots between the cover and the wall, in points (a dot at least).
+static const CGFloat kBorder = 14;
+// With the text shadows on, a dot under the player's text or glyphs at this share of its brightness, and one a
+// dot further out at the second, so the words stand on a dark patch with soft edges.
+static const float kUnderText = 0.1f, kNearText = 0.4f;
+// How often the animated cover's frame is read for the dots' colors, and the text's places looked up.
+static const CFTimeInterval kFrameEvery = 0.25, kTextEvery = 0.5;
+// The share of the colors kept from the frame before, so they flow rather than jump between frames.
+static const float kFrameKeep = 0.4f;
 
 NSInteger SGRMosaicDots(void) {
     NSInteger dots = SGInt(SGRKeyMosaicDots, SGRMosaicDotsDefault);
@@ -87,6 +96,11 @@ NSInteger SGRMosaicDots(void) {
 NSInteger SGRMosaicSize(void) {
     NSInteger size = SGInt(SGRKeyMosaicSize, SGRMosaicSizeDefault);
     return MIN(MAX(size, SGRMosaicSizeLeast), SGRMosaicSizeMost);
+}
+
+NSInteger SGRMosaicThreshold(void) {
+    NSInteger threshold = SGInt(SGRKeyMosaicThreshold, SGRMosaicThresholdDefault);
+    return MIN(MAX(threshold, SGRMosaicThresholdLeast), SGRMosaicThresholdMost);
 }
 
 // The animated cover Mosaic plays in the cover's square, nil for none (PlayerMotion.x hands it over).
@@ -165,7 +179,17 @@ static NSDictionary *noActions(void) {
     NSURL *_clipFile;
     float *_samples;   // the cover's color under each dot, brought to full brightness, RGB a dot
     uint8_t *_pixels;
-    struct { CGRect bounds, cover; float front[kBands], back[kBands], pulse; } _lit;
+    // The animated cover's frame the colors come from while it plays, read every kFrameEvery from its file.
+    UIImage *_clipFrame;
+    AVAssetImageGenerator *_frames;
+    CFTimeInterval _frameAt;
+    BOOL _frameBusy, _blendNext;
+    // The player's text and glyphs: where they are, and each dot's shade from them (0 none, 1 near, 2 under).
+    NSArray<NSValue *> *_textRects;
+    CFTimeInterval _textAt;
+    uint8_t *_shade;
+    NSUInteger _textGeneration;
+    struct { CGRect bounds, cover; float front[kBands], back[kBands], pulse, threshold; NSUInteger text; } _lit;
 }
 
 // As PlayerMotion.x: what fades is the effect view's effect, never its alpha or an ancestor's.
@@ -243,6 +267,7 @@ static UIColor *lit(UIColor *color, CGFloat luminance) {
     if (_reading) needReader(NO);
     free(_samples);
     free(_pixels);
+    free(_shade);
 }
 
 #pragma mark - color
@@ -597,12 +622,25 @@ static UIImage *lightImage(CGFloat pitch, CGFloat light) {
     _clipPlayer = nil;
     _clipLooper = nil;
     _clipFile = file;
+    _frames = nil;
+    _frameBusy = NO;
     if (!file || !_clipStill) {
         _clipStill.hidden = YES;
         _clipStill.contents = nil;
+        if (_clipFrame) {
+            _clipFrame = nil;
+            [self sampleArtwork];   // back to the cover's colors
+        }
         return;
     }
     _clipStill.contents = (__bridge id)poster.CGImage;
+    // The dots take the clip's colors: its poster at once, then its frames as it plays.
+    _clipFrame = poster;
+    _frames = [AVAssetImageGenerator assetImageGeneratorWithAsset:[AVURLAsset URLAssetWithURL:file options:nil]];
+    _frames.maximumSize = CGSizeMake(96, 96);
+    _frames.appliesPreferredTrackTransform = YES;
+    _frames.requestedTimeToleranceBefore = _frames.requestedTimeToleranceAfter = CMTimeMakeWithSeconds(0.1, 600);
+    if (poster) [self sampleArtwork];
     _clipPlayer = [AVQueuePlayer new];
     _clipPlayer.muted = YES;
     _clipPlayer.preventsDisplaySleepDuringVideoPlayback = NO;
@@ -611,6 +649,29 @@ static UIImage *lightImage(CGFloat pitch, CGFloat light) {
     _clipStill.hidden = NO;
     [self placeClip];
     [self updateMotion];
+}
+
+// The clip's frame now, read off its file away from the main thread, for the dots' colors. One at a time.
+- (void)readClipFrame {
+    if (!_frames || _frameBusy || !_clipPlayer || _clipStill.hidden) return;
+    CFTimeInterval now = CACurrentMediaTime();
+    if (now - _frameAt < kFrameEvery) return;
+    _frameAt = now;
+    _frameBusy = YES;
+    AVAssetImageGenerator *frames = _frames;
+    __weak SGRVisualiserView *weakSelf = self;
+    [frames generateCGImageAsynchronouslyForTime:_clipPlayer.currentTime completionHandler:^(CGImageRef image, CMTime actual, NSError *error) {
+        UIImage *frame = image ? [UIImage imageWithCGImage:image] : nil;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            SGRVisualiserView *view = weakSelf;
+            if (!view || view->_frames != frames) return;
+            view->_frameBusy = NO;
+            if (!frame) return;
+            view->_clipFrame = frame;
+            view->_blendNext = YES;
+            [view sampleArtwork];
+        });
+    }];
 }
 
 // Over the cover's square, as large and as round as it is drawn now.
@@ -644,16 +705,23 @@ static UIImage *lightImage(CGFloat pitch, CGFloat light) {
     _rows = rows;
     free(_samples);
     free(_pixels);
+    free(_shade);
     _samples = calloc((size_t)MAX(columns * rows, 1) * 3, sizeof(float));
     _pixels = calloc((size_t)MAX(columns * rows, 1) * 4, 1);
+    _shade = calloc((size_t)MAX(columns * rows, 1), 1);
+    _textRects = nil;
+    _textAt = 0;
     memset(&_lit, 0, sizeof _lit);
     [self sampleArtwork];
 }
 
-// The cover stretched over the grid, a pixel a dot, each brought to full brightness: a light shows its color
+// The cover (or the frame of its animated cover playing) stretched over the grid, a pixel a dot, each brought to full brightness: a light shows its color
 // lit, and a dark part of the cover still lights in its own hue. Near-black and gray come out a soft white.
 - (void)sampleArtwork {
-    if (!_samples || !_artwork.CGImage) return;
+    CGImageRef source = (_clipFrame ?: _artwork).CGImage;
+    BOOL blend = _blendNext;
+    _blendNext = NO;
+    if (!_samples || !source) return;
     int columns = _columns, rows = _rows;
     uint8_t *rgba = calloc((size_t)columns * rows * 4, 1);
     CGColorSpaceRef space = CGColorSpaceCreateDeviceRGB();
@@ -661,7 +729,7 @@ static UIImage *lightImage(CGFloat pitch, CGFloat light) {
     CGColorSpaceRelease(space);
     if (context) {
         CGContextSetInterpolationQuality(context, kCGInterpolationMedium);
-        CGContextDrawImage(context, CGRectMake(0, 0, columns, rows), _artwork.CGImage);
+        CGContextDrawImage(context, CGRectMake(0, 0, columns, rows), source);
         CGContextRelease(context);
     }
     for (int i = 0; i < columns * rows; i++) {
@@ -675,9 +743,10 @@ static UIImage *lightImage(CGFloat pitch, CGFloat light) {
             float low = fminf(r, fminf(g, b)), lift = fminf(1, 1.25f * (1 - low)) / fmaxf(1 - low, 0.001f);
             r = 1 - (1 - r) * lift; g = 1 - (1 - g) * lift; b = 1 - (1 - b) * lift;
         }
-        _samples[i * 3] = r;
-        _samples[i * 3 + 1] = g;
-        _samples[i * 3 + 2] = b;
+        float keep = blend ? kFrameKeep : 0;
+        _samples[i * 3] = keep * _samples[i * 3] + (1 - keep) * r;
+        _samples[i * 3 + 1] = keep * _samples[i * 3 + 1] + (1 - keep) * g;
+        _samples[i * 3 + 2] = keep * _samples[i * 3 + 2] + (1 - keep) * b;
     }
     free(rgba);
     memset(&_lit, 0, sizeof _lit);
@@ -695,10 +764,41 @@ static UIImage *lightImage(CGFloat pitch, CGFloat light) {
     return CGRectMake(round((bounds.size.width - side) / 2), round((bounds.size.height - side) / 2.6), side, side);
 }
 
+// Each dot's shade from the player's text, looked up again every kTextEvery: the text moves only with the layout.
+- (void)updateTextShade {
+    CFTimeInterval now = CACurrentMediaTime();
+    if (_textRects && now - _textAt < kTextEvery) return;
+    _textAt = now;
+    NSArray<NSValue *> *rects = SGRPlayerTextRectsIn(self);
+    if (_textRects && [rects isEqualToArray:_textRects]) return;
+    _textRects = rects;
+    _textGeneration++;
+    memset(_shade, 0, (size_t)_columns * _rows);
+    CGFloat originX = _dots.frame.origin.x;
+    for (NSValue *value in rects) {
+        for (int pass = 1; pass <= 2; pass++) {
+            CGFloat grow = _pitch * (pass == 2 ? 0.6 : 1.6);
+            CGRect area = CGRectInset(value.CGRectValue, -grow, -grow);
+            int left = MAX(0, (int)floor((CGRectGetMinX(area) - originX) / _pitch));
+            int right = MIN(_columns - 1, (int)floor((CGRectGetMaxX(area) - originX) / _pitch));
+            int top = MAX(0, (int)floor(CGRectGetMinY(area) / _pitch)), bottom = MIN(_rows - 1, (int)floor(CGRectGetMaxY(area) / _pitch));
+            for (int row = top; row <= bottom; row++) {
+                for (int column = left; column <= right; column++) {
+                    CGPoint center = CGPointMake(originX + (column + 0.5) * _pitch, (row + 0.5) * _pitch);
+                    uint8_t *shade = _shade + row * _columns + column;
+                    if (CGRectContainsPoint(area, center) && *shade < pass) *shade = (uint8_t)pass;
+                }
+            }
+        }
+    }
+}
+
 // Each dot outside the cover belongs to a band by its direction from the cover's middle, the bass straight out
 // of the sides and the treble out of the top and foot, mirrored all four ways, and lights while the band's bar
 // reaches it: how far it stands from the cover's nearest edge, in dots. The slower `back` levels leave a dimmer
 // trail behind a falling bar. Unlit, a dot glows faintly in its color; the kick lifts the whole wall a little.
+// Only the part of a band's level over the threshold reaches out. A ring of dark dots kBorder wide stands around
+// the cover, and with the text shadows on the dots under the player's text are dimmed.
 - (void)drawWall {
     CGRect bounds = self.bounds, cover = [self coverRect];
     [CATransaction begin];
@@ -706,8 +806,13 @@ static UIImage *lightImage(CGFloat pitch, CGFloat light) {
     [self placeClip];
     [CATransaction commit];
     if (!_pixels || !_columns) return;
-    if (CGRectEqualToRect(bounds, _lit.bounds) && CGRectEqualToRect(cover, _lit.cover) && _pulse == _lit.pulse
-        && !memcmp(_front, _lit.front, sizeof _front) && !memcmp(_back, _lit.back, sizeof _back)) return;
+    [self readClipFrame];
+    [self updateTextShade];
+    float threshold = SGRMosaicThreshold() / 100.0f;
+    if (CGRectEqualToRect(bounds, _lit.bounds) && CGRectEqualToRect(cover, _lit.cover) && _pulse == _lit.pulse && threshold == _lit.threshold
+        && _textGeneration == _lit.text && !memcmp(_front, _lit.front, sizeof _front) && !memcmp(_back, _lit.back, sizeof _back)) return;
+    _lit.threshold = threshold;
+    _lit.text = _textGeneration;
     _lit.bounds = bounds;
     _lit.cover = cover;
     _lit.pulse = _pulse;
@@ -718,6 +823,7 @@ static UIImage *lightImage(CGFloat pitch, CGFloat light) {
     CGFloat midX = CGRectGetMidX(cover), midY = CGRectGetMidY(cover);
     CGFloat halfW = MAX(cover.size.width / 2, 1), halfH = MAX(cover.size.height / 2, 1);
     float glow = kUnlit + kUnlitPulse * _pulse;
+    CGFloat border = MAX(kBorder, _pitch);
     for (int row = 0; row < _rows; row++) {
         CGFloat y = (row + 0.5) * _pitch;
         for (int column = 0; column < _columns; column++) {
@@ -726,16 +832,25 @@ static UIImage *lightImage(CGFloat pitch, CGFloat light) {
             CGFloat outY = MAX(MAX(CGRectGetMinY(cover) - y, y - CGRectGetMaxY(cover)), 0);
             int i = row * _columns + column;
             float level = 0;
-            if (outX > 0 || outY > 0) {
+            CGFloat out = MAX(outX, outY);
+            if (out > 0 && out < border) {
+                memset(_pixels + i * 4, 0, 3);
+                _pixels[i * 4 + 3] = 255;
+                continue;
+            }
+            if (out > 0) {
                 double angle = atan2(fabs(y - midY) / halfH, fabs(x - midX) / halfW) / M_PI_2;
                 int band = kFirst + (int)lround(angle * (kShown - 1));
-                float distance = (float)(MAX(outX, outY) / _pitch);
-                float front = powf(_front[band], 1.2f) * (float)reach, back = powf(_back[band], 1.2f) * (float)reach;
+                float distance = (float)((out - border) / _pitch);
+                float frontLevel = fmaxf(0, (_front[band] - threshold) / (1 - threshold));
+                float backLevel = fmaxf(0, (_back[band] - threshold) / (1 - threshold));
+                float front = powf(frontLevel, 1.2f) * (float)reach, back = powf(backLevel, 1.2f) * (float)reach;
                 float lit = fminf(1, fmaxf(0, front - distance + 0.5f));
                 float trail = kTrail * fminf(1, fmaxf(0, back - distance + 0.5f));
                 level = fmaxf(lit, trail);
             }
             float brightness = glow + (1 - glow) * level;
+            if (_shade[i]) brightness *= _shade[i] == 2 ? kUnderText : kNearText;
             const float *color = _samples + i * 3;
             uint8_t *pixel = _pixels + i * 4;
             pixel[0] = (uint8_t)lroundf(255 * color[0] * brightness);
