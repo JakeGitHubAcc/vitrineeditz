@@ -28,7 +28,7 @@ Tested on Spotify 9.1.94 under iOS 26, with Redesigned UI on.
 - **Featured artists credited**: "Song (feat. A & B)" by C shows as "Song" by "C, A, B" in the player, the mini player, the lock screen and Local Albums. The files themselves aren't changed.
 - **Go to Album** in the player's ⋯ menu while a local file plays.
 - **Tap the artist** under a local file in the player for the same sheet a Spotify song gives: each credited artist's real Spotify page (found by name) and the song's local album.
-- **Records** (Redesigned UI): a tab with a disc icon that shows your saved albums and your local albums as a crate of vinyl records. Scroll to flip through them; tap one to pull it out of the crate and tap it again to open the album. With **Vinyl & CD Scans** on, records wear the real scanned sleeve (front and spine) of a vinyl or CD release from the Cover Art Archive; otherwise the spine is drawn in the cover's colors. It can be sorted and filtered, and removed or added back from the Tab bar settings.
+- **Records** (Redesigned UI): a tab with a disc icon that shows your saved albums and your local albums as a crate of vinyl records. Scroll to flip through them; tap one to pull it out, drag across it to turn it over, and tap it again to open the album. With **Vinyl Scans** on, records wear the real sleeve of a vinyl pressing from the Cover Art Archive (front, back, spine, hype sticker, and a gatefold you can open); otherwise the streaming cover is used and the spine is drawn in its colors. It can be sorted and filtered, and removed or added back from the Tab bar settings.
 
 **Fixes for Spotify 9.1.94**
 - The redesigned Library header applies again (it was left as Spotify's).
