@@ -184,9 +184,6 @@ NSInteger SGRMosaicThreshold(void);
 #define SGRKeyMosaicTextShadow @"spotifyglass.redesign.player.mosaic.textShadow"
 // The shadows put on or taken off again, for a change of background or of the switch.
 void SGRPlayerTextShadowsChanged(void);
-// Where the player's text, glyphs and bars are, in `view`'s coordinates, while the shadows are on: Mosaic darkens
-// its dots under and around them. Empty while they are off or the player is not in `view`'s window.
-NSArray<NSValue *> *SGRPlayerTextRectsIn(UIView *view);
 // The animated cover Mosaic plays over the cover's square, from PlayerMotion.x; nil takes it off.
 void SGRPlayerMosaicSetClip(NSURL *file, UIImage *poster);
 // Mosaic is on the field with an animated cover playing in the square, which Spotify's cover makes room for.

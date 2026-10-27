@@ -80,11 +80,10 @@ static const float kUnlit = 0.12f, kUnlitPulse = 0.08f, kTrail = 0.35f;
 static const CGFloat kClipCorner = 0.025;
 // The ring of dark dots between the cover and the wall, in points (a dot at least).
 static const CGFloat kBorder = 14;
-// With the text shadows on, a dot under the player's text or glyphs at this share of its brightness, and one a
-// dot further out at the second, so the words stand on a dark patch with soft edges.
-static const float kUnderText = 0.1f, kNearText = 0.4f;
-// How often the animated cover's frame is read for the dots' colors, and the text's places looked up.
-static const CFTimeInterval kFrameEvery = 0.25, kTextEvery = 0.5;
+// How often the animated cover's frame is read for the dots' colors.
+static const CFTimeInterval kFrameEvery = 0.25;
+// The dimmest a lit dot of the cover's darkest part shines, so black in the cover is still a faint light.
+static const float kValueFloor = 0.08f;
 // The share of the colors kept from the frame before, so they flow rather than jump between frames.
 static const float kFrameKeep = 0.4f;
 
@@ -184,12 +183,7 @@ static NSDictionary *noActions(void) {
     AVAssetImageGenerator *_frames;
     CFTimeInterval _frameAt;
     BOOL _frameBusy, _blendNext;
-    // The player's text and glyphs: where they are, and each dot's shade from them (0 none, 1 near, 2 under).
-    NSArray<NSValue *> *_textRects;
-    CFTimeInterval _textAt;
-    uint8_t *_shade;
-    NSUInteger _textGeneration;
-    struct { CGRect bounds, cover; float front[kBands], back[kBands], pulse, threshold; NSUInteger text; } _lit;
+    struct { CGRect bounds, cover; float front[kBands], back[kBands], pulse, threshold; } _lit;
 }
 
 // As PlayerMotion.x: what fades is the effect view's effect, never its alpha or an ancestor's.
@@ -267,7 +261,6 @@ static UIColor *lit(UIColor *color, CGFloat luminance) {
     if (_reading) needReader(NO);
     free(_samples);
     free(_pixels);
-    free(_shade);
 }
 
 #pragma mark - color
@@ -705,18 +698,14 @@ static UIImage *lightImage(CGFloat pitch, CGFloat light) {
     _rows = rows;
     free(_samples);
     free(_pixels);
-    free(_shade);
     _samples = calloc((size_t)MAX(columns * rows, 1) * 3, sizeof(float));
     _pixels = calloc((size_t)MAX(columns * rows, 1) * 4, 1);
-    _shade = calloc((size_t)MAX(columns * rows, 1), 1);
-    _textRects = nil;
-    _textAt = 0;
     memset(&_lit, 0, sizeof _lit);
     [self sampleArtwork];
 }
 
-// The cover (or the frame of its animated cover playing) stretched over the grid, a pixel a dot, each brought to full brightness: a light shows its color
-// lit, and a dark part of the cover still lights in its own hue. Near-black and gray come out a soft white.
+// The cover (or the frame of its animated cover playing) stretched over the grid, a pixel a dot, in the cover's
+// color and brightness: a dark part of the cover lights dim, a bright part bright, gray as gray.
 - (void)sampleArtwork {
     CGImageRef source = (_clipFrame ?: _artwork).CGImage;
     BOOL blend = _blendNext;
@@ -735,13 +724,15 @@ static UIImage *lightImage(CGFloat pitch, CGFloat light) {
     for (int i = 0; i < columns * rows; i++) {
         float r = rgba[i * 4] / 255.0f, g = rgba[i * 4 + 1] / 255.0f, b = rgba[i * 4 + 2] / 255.0f;
         float most = fmaxf(r, fmaxf(g, b)), least = fminf(r, fminf(g, b));
+        // The cover's own brightness, so a dark part of it lights dim and a bright part bright.
+        float value = kValueFloor + (1 - kValueFloor) * most;
         if (most < 0.06f || most - least < 0.04f) {
-            r = g = b = 0.8f;
+            r = g = b = value;
         } else {
-            // Full brightness, the saturation lifted a little so a pale cover's lights still have a hue.
+            // The saturation lifted a little so a pale cover's lights still have a hue, then the cover's brightness.
             r /= most; g /= most; b /= most;
             float low = fminf(r, fminf(g, b)), lift = fminf(1, 1.25f * (1 - low)) / fmaxf(1 - low, 0.001f);
-            r = 1 - (1 - r) * lift; g = 1 - (1 - g) * lift; b = 1 - (1 - b) * lift;
+            r = (1 - (1 - r) * lift) * value; g = (1 - (1 - g) * lift) * value; b = (1 - (1 - b) * lift) * value;
         }
         float keep = blend ? kFrameKeep : 0;
         _samples[i * 3] = keep * _samples[i * 3] + (1 - keep) * r;
@@ -764,41 +755,12 @@ static UIImage *lightImage(CGFloat pitch, CGFloat light) {
     return CGRectMake(round((bounds.size.width - side) / 2), round((bounds.size.height - side) / 2.6), side, side);
 }
 
-// Each dot's shade from the player's text, looked up again every kTextEvery: the text moves only with the layout.
-- (void)updateTextShade {
-    CFTimeInterval now = CACurrentMediaTime();
-    if (_textRects && now - _textAt < kTextEvery) return;
-    _textAt = now;
-    NSArray<NSValue *> *rects = SGRPlayerTextRectsIn(self);
-    if (_textRects && [rects isEqualToArray:_textRects]) return;
-    _textRects = rects;
-    _textGeneration++;
-    memset(_shade, 0, (size_t)_columns * _rows);
-    CGFloat originX = _dots.frame.origin.x;
-    for (NSValue *value in rects) {
-        for (int pass = 1; pass <= 2; pass++) {
-            CGFloat grow = _pitch * (pass == 2 ? 0.6 : 1.6);
-            CGRect area = CGRectInset(value.CGRectValue, -grow, -grow);
-            int left = MAX(0, (int)floor((CGRectGetMinX(area) - originX) / _pitch));
-            int right = MIN(_columns - 1, (int)floor((CGRectGetMaxX(area) - originX) / _pitch));
-            int top = MAX(0, (int)floor(CGRectGetMinY(area) / _pitch)), bottom = MIN(_rows - 1, (int)floor(CGRectGetMaxY(area) / _pitch));
-            for (int row = top; row <= bottom; row++) {
-                for (int column = left; column <= right; column++) {
-                    CGPoint center = CGPointMake(originX + (column + 0.5) * _pitch, (row + 0.5) * _pitch);
-                    uint8_t *shade = _shade + row * _columns + column;
-                    if (CGRectContainsPoint(area, center) && *shade < pass) *shade = (uint8_t)pass;
-                }
-            }
-        }
-    }
-}
-
 // Each dot outside the cover belongs to a band by its direction from the cover's middle, the bass straight out
 // of the sides and the treble out of the top and foot, mirrored all four ways, and lights while the band's bar
 // reaches it: how far it stands from the cover's nearest edge, in dots. The slower `back` levels leave a dimmer
 // trail behind a falling bar. Unlit, a dot glows faintly in its color; the kick lifts the whole wall a little.
 // Only the part of a band's level over the threshold reaches out. A ring of dark dots kBorder wide stands around
-// the cover, and with the text shadows on the dots under the player's text are dimmed.
+// the cover.
 - (void)drawWall {
     CGRect bounds = self.bounds, cover = [self coverRect];
     [CATransaction begin];
@@ -807,12 +769,10 @@ static UIImage *lightImage(CGFloat pitch, CGFloat light) {
     [CATransaction commit];
     if (!_pixels || !_columns) return;
     [self readClipFrame];
-    [self updateTextShade];
     float threshold = SGRMosaicThreshold() / 100.0f;
     if (CGRectEqualToRect(bounds, _lit.bounds) && CGRectEqualToRect(cover, _lit.cover) && _pulse == _lit.pulse && threshold == _lit.threshold
-        && _textGeneration == _lit.text && !memcmp(_front, _lit.front, sizeof _front) && !memcmp(_back, _lit.back, sizeof _back)) return;
+        && !memcmp(_front, _lit.front, sizeof _front) && !memcmp(_back, _lit.back, sizeof _back)) return;
     _lit.threshold = threshold;
-    _lit.text = _textGeneration;
     _lit.bounds = bounds;
     _lit.cover = cover;
     _lit.pulse = _pulse;
@@ -850,7 +810,6 @@ static UIImage *lightImage(CGFloat pitch, CGFloat light) {
                 level = fmaxf(lit, trail);
             }
             float brightness = glow + (1 - glow) * level;
-            if (_shade[i]) brightness *= _shade[i] == 2 ? kUnderText : kNearText;
             const float *color = _samples + i * 3;
             uint8_t *pixel = _pixels + i * 4;
             pixel[0] = (uint8_t)lroundf(255 * color[0] * brightness);
