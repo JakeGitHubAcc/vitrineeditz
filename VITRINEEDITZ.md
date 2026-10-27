@@ -16,7 +16,7 @@ Tested on Spotify 9.1.94 under iOS 26, with Redesigned UI on.
   - It needs a Windows PC with an NVIDIA GPU (8 GB is enough) on the same Wi-Fi as the phone.
 
 **Player**
-- **Mosaic**: a sixth player background (Redesigned UI), picked on the Player page or from the player's ⋯ menu. A dark wall of dots in the cover's colors lights up in bars out of the cover's edges with the music: bass from the sides, treble from the top and bottom. Where the album has an animated cover, it plays in the middle in place of the still one, and the dots take their colors from it as it moves. A ring of dark dots frames the cover. **Dots across** and **Dot size** set how fine the wall is, **Audio threshold** sets how loud the music must be before dots light (higher keeps more of the screen dark), and **Shadow under text** (on by default) darkens the dots behind the title, times and buttons so they stay readable.
+- **Mosaic**: a sixth player background (Redesigned UI), picked on the Player page or from the player's ⋯ menu. A dark wall of dots in the cover's colors and brightness lights up in bars out of the cover's edges with the music: bass from the sides, treble from the top and bottom. Where the album has an animated cover, it plays in the middle in place of the still one, and the dots take their colors from it as it moves. A ring of dark dots frames the cover. **Dots across** and **Dot size** set how fine the wall is, **Audio threshold** sets how loud the music must be before dots light (higher keeps more of the screen dark), and **Shadow under text** (on by default) puts a soft shadow under the title, times and buttons so they stay readable.
 
 **Local files**
 - **Local Albums**: your local files grouped into albums, the way iTunes and YouTube Music show them.
