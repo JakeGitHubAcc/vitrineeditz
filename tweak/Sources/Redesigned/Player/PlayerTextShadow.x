@@ -39,6 +39,11 @@ static void shade(UIView *view, BOOL on) {
 // view filled with a color. The containers between them are passed through, so a row's shadow is its contents'.
 static void shadeShown(UIView *view, int depth) {
     if (depth > 14) return;
+    // A blur's own layers stay as they are; what sits on it is in its content view.
+    if ([view isKindOfClass:UIVisualEffectView.class]) {
+        shadeShown(((UIVisualEffectView *)view).contentView, depth + 1);
+        return;
+    }
     BOOL shows = [view isKindOfClass:UILabel.class] || [view isKindOfClass:UIImageView.class]
               || [view isKindOfClass:UISlider.class] || [view isKindOfClass:UIProgressView.class]
               || (!view.subviews.count && view.backgroundColor && CGColorGetAlpha(view.backgroundColor.CGColor) > 0.1);
